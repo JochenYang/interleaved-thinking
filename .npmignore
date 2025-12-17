@@ -1,0 +1,36 @@
+# Source files
+src/
+*.ts
+!*.d.ts
+
+# Tests
+__tests__/
+*.test.ts
+*.spec.ts
+coverage/
+
+# Configuration
+tsconfig.json
+vitest.config.ts
+.eslintrc*
+.prettierrc*
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Specs
+.kiro/
