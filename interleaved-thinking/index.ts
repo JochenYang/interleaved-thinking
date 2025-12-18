@@ -104,7 +104,11 @@ You should:
         .describe("Estimated total steps needed (e.g., 5, 10)"),
       nextStepNeeded: z.boolean().describe("Whether another step is needed"),
       phase: z
-        .enum(["thinking", "tool_call", "analysis"])
+        .union([
+          z.literal("thinking"),
+          z.literal("tool_call"),
+          z.literal("analysis"),
+        ])
         .describe(
           "Current phase: 'thinking' for reasoning, 'tool_call' for tool execution, 'analysis' for result processing"
         ),
