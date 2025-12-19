@@ -175,15 +175,15 @@ You should:
   async (args) => {
     const result = await thinkingServer.processStep(args);
 
-    if (result.isError) {
-      return {
-        ...result,
-        isError: undefined, // Remove isError from response
-      };
-    }
-
     // Parse the JSON response to get structured content
     const parsedContent = JSON.parse(result.content[0].text);
+
+    if (result.isError) {
+      return {
+        content: result.content,
+        structuredContent: parsedContent,
+      };
+    }
 
     return {
       content: result.content,
