@@ -113,26 +113,38 @@ You should:
           "Current phase: 'thinking' for reasoning, 'tool_call' for tool execution, 'analysis' for result processing"
         ),
       toolCall: z
-        .object({
-          toolName: z.string().describe("Name of the tool to call"),
-          parameters: z
-            .record(z.string(), z.any())
-            .describe("Tool parameters as key-value pairs"),
-          metadata: z
-            .object({
-              timeout: z
-                .number()
-                .optional()
-                .describe("Timeout in milliseconds"),
-              retryCount: z.number().optional().describe("Number of retries"),
-              priority: z
-                .enum(["high", "normal", "low"])
-                .optional()
-                .describe("Execution priority"),
-            })
-            .optional()
-            .describe("Optional metadata"),
-        })
+        .union([
+          z.object({
+            toolName: z.string().describe("Name of the tool to call"),
+            parameters: z
+              .union([
+                z.record(z.string(), z.any()),
+                z.string(), // Accept JSON string
+              ])
+              .describe("Tool parameters as key-value pairs or JSON string"),
+            metadata: z
+              .union([
+                z.object({
+                  timeout: z
+                    .number()
+                    .optional()
+                    .describe("Timeout in milliseconds"),
+                  retryCount: z
+                    .number()
+                    .optional()
+                    .describe("Number of retries"),
+                  priority: z
+                    .enum(["high", "normal", "low"])
+                    .optional()
+                    .describe("Execution priority"),
+                }),
+                z.string(), // Accept JSON string
+              ])
+              .optional()
+              .describe("Optional metadata"),
+          }),
+          z.string(), // Accept entire toolCall as JSON string
+        ])
         .optional()
         .describe("Tool call information (required when phase='tool_call')"),
       isRevision: z
@@ -173,7 +185,50 @@ You should:
     },
   },
   async (args) => {
-    const result = await thinkingServer.processStep(args);
+    // Preprocess args: handle cases where nested objects are passed as JSON strings
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const processedArgs: any = { ...args };
+
+    // Handle toolCall if it's a string (some MCP clients serialize nested objects)
+    if (typeof processedArgs.toolCall === "string") {
+      try {
+        processedArgs.toolCall = JSON.parse(processedArgs.toolCall);
+      } catch {
+        // If parsing fails, leave as is and let validation handle it
+      }
+    }
+
+    // Handle metadata inside toolCall if it's a string
+    if (
+      processedArgs.toolCall &&
+      typeof processedArgs.toolCall === "object" &&
+      typeof processedArgs.toolCall.metadata === "string"
+    ) {
+      try {
+        processedArgs.toolCall.metadata = JSON.parse(
+          processedArgs.toolCall.metadata
+        );
+      } catch {
+        // If parsing fails, leave as is
+      }
+    }
+
+    // Handle parameters inside toolCall if it's a string
+    if (
+      processedArgs.toolCall &&
+      typeof processedArgs.toolCall === "object" &&
+      typeof processedArgs.toolCall.parameters === "string"
+    ) {
+      try {
+        processedArgs.toolCall.parameters = JSON.parse(
+          processedArgs.toolCall.parameters
+        );
+      } catch {
+        // If parsing fails, leave as is
+      }
+    }
+
+    const result = await thinkingServer.processStep(processedArgs);
 
     // Parse the JSON response to get structured content
     const parsedContent = JSON.parse(result.content[0].text);
