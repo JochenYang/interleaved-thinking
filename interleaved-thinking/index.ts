@@ -113,18 +113,48 @@ You should:
           "Current phase: 'thinking' for reasoning, 'tool_call' for tool execution, 'analysis' for result processing"
         ),
       toolCall: z
-        .union([
-          z.object({
-            toolName: z.string().describe("Name of the tool to call"),
-            parameters: z
-              .union([
-                z.record(z.string(), z.any()),
-                z.string(), // Accept JSON string
-              ])
-              .describe("Tool parameters as key-value pairs or JSON string"),
-            metadata: z
-              .union([
-                z.object({
+        .preprocess(
+          (val) => {
+            // If toolCall is a string, try to parse it as JSON
+            if (typeof val === "string") {
+              try {
+                return JSON.parse(val);
+              } catch {
+                // If parsing fails, return as-is and let validation handle it
+                return val;
+              }
+            }
+            // If it's an object, check nested fields
+            if (val && typeof val === "object") {
+              const obj: any = { ...val };
+              // Parse parameters if it's a string
+              if (typeof obj.parameters === "string") {
+                try {
+                  obj.parameters = JSON.parse(obj.parameters);
+                } catch {
+                  // Keep as-is
+                }
+              }
+              // Parse metadata if it's a string
+              if (typeof obj.metadata === "string") {
+                try {
+                  obj.metadata = JSON.parse(obj.metadata);
+                } catch {
+                  // Keep as-is
+                }
+              }
+              return obj;
+            }
+            return val;
+          },
+          z
+            .object({
+              toolName: z.string().describe("Name of the tool to call"),
+              parameters: z
+                .record(z.string(), z.any())
+                .describe("Tool parameters as key-value pairs"),
+              metadata: z
+                .object({
                   timeout: z
                     .number()
                     .optional()
@@ -137,15 +167,12 @@ You should:
                     .enum(["high", "normal", "low"])
                     .optional()
                     .describe("Execution priority"),
-                }),
-                z.string(), // Accept JSON string
-              ])
-              .optional()
-              .describe("Optional metadata"),
-          }),
-          z.string(), // Accept entire toolCall as JSON string
-        ])
-        .optional()
+                })
+                .optional()
+                .describe("Optional metadata"),
+            })
+            .optional()
+        )
         .describe("Tool call information (required when phase='tool_call')"),
       isRevision: z
         .boolean()
@@ -185,50 +212,8 @@ You should:
     },
   },
   async (args) => {
-    // Preprocess args: handle cases where nested objects are passed as JSON strings
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const processedArgs: any = { ...args };
-
-    // Handle toolCall if it's a string (some MCP clients serialize nested objects)
-    if (typeof processedArgs.toolCall === "string") {
-      try {
-        processedArgs.toolCall = JSON.parse(processedArgs.toolCall);
-      } catch {
-        // If parsing fails, leave as is and let validation handle it
-      }
-    }
-
-    // Handle metadata inside toolCall if it's a string
-    if (
-      processedArgs.toolCall &&
-      typeof processedArgs.toolCall === "object" &&
-      typeof processedArgs.toolCall.metadata === "string"
-    ) {
-      try {
-        processedArgs.toolCall.metadata = JSON.parse(
-          processedArgs.toolCall.metadata
-        );
-      } catch {
-        // If parsing fails, leave as is
-      }
-    }
-
-    // Handle parameters inside toolCall if it's a string
-    if (
-      processedArgs.toolCall &&
-      typeof processedArgs.toolCall === "object" &&
-      typeof processedArgs.toolCall.parameters === "string"
-    ) {
-      try {
-        processedArgs.toolCall.parameters = JSON.parse(
-          processedArgs.toolCall.parameters
-        );
-      } catch {
-        // If parsing fails, leave as is
-      }
-    }
-
-    const result = await thinkingServer.processStep(processedArgs);
+    // Args are already preprocessed by Zod, no need for manual parsing
+    const result = await thinkingServer.processStep(args);
 
     // Parse the JSON response to get structured content
     const parsedContent = JSON.parse(result.content[0].text);
