@@ -16,54 +16,40 @@ server.registerTool(
   "interleavedthinking",
   {
     title: "Interleaved Sequential Thinking",
-    description: `A unified tool supporting both sequential thinking and interleaved thinking modes.
-This tool adapts to your needs - use it for pure reasoning or combine thinking with tool execution.
-
-DUAL MODE SUPPORT:
-1. Sequential Mode (Pure Thinking):
-   - Use phase='thinking' throughout without toolCall
-   - Perfect for: planning, design, analysis, problem decomposition
-   - Like traditional sequential thinking but with revision and branching support
-
-2. Interleaved Mode (Thinking + Tools):
-   - Alternate between phase='thinking', 'tool_call', and 'analysis'
-   - Perfect for: debugging, exploration, tasks requiring external information
-   - Enables dynamic strategy adjustment based on tool results
+    description: `A powerful tool for dynamic problem-solving through structured thinking and tool execution.
+This tool helps analyze complex problems through a flexible process that combines reasoning with action.
+Each step can include pure thinking, tool execution, or result analysis as understanding deepens.
 
 When to use this tool:
 - Breaking down complex problems that require multiple steps
-- Pure reasoning tasks (planning, design, analysis)
-- Tasks that need external information during the reasoning process
-- Problems where strategy needs to be adjusted based on intermediate results
-- Situations where the full scope is not clear at the start
-- Tasks requiring iterative verification and information gathering
-- Problems that benefit from "think-execute-reflect" cycles
+- Tasks that need external information or tool execution during reasoning
+- Problems where strategy needs adjustment based on intermediate results
+- Analysis that requires verification through tool calls
+- Debugging and exploration tasks
+- Problems where the full scope is not clear initially
+- Situations requiring iterative "think-execute-reflect" cycles
 
 Key features:
-- Supports both sequential (pure thinking) and interleaved (thinking + tools) modes
-- Three distinct phases: thinking, tool_call, and analysis
-- Dynamic tool calling with result feedback
-- Flexible strategy adjustment based on execution results
+- Flexible three-phase cycle: thinking, tool execution, and analysis
+- Can work as pure sequential thinking (no tools) or interleaved mode (with tools)
+- Dynamic strategy adjustment based on execution results
 - Branch exploration for alternative approaches
 - Revision support for correcting previous reasoning
 - Complete history tracking of thoughts and tool calls
-- Resource limits to prevent infinite loops
+- Automatic mode selection based on your needs
 
-Phases explained:
-- thinking: Pure reasoning without tool execution. Use this to analyze, plan, or decide next steps.
-  * For sequential mode: Use only 'thinking' phase throughout the entire process
-  * For interleaved mode: Use 'thinking' between tool calls to plan next actions
-- tool_call: Execute external tools to gather information. Specify toolName and parameters.
-  * Only use when you need to call external tools (switches to interleaved mode)
-- analysis: Analyze tool execution results and decide how to proceed.
-  * Use after tool_call to process and reflect on tool outputs
+How it works:
+- Use phase='thinking' for pure reasoning steps (like sequential thinking)
+- Use phase='tool_call' when you need to execute external tools
+- Use phase='analysis' to process and reflect on tool results
+- The tool adapts automatically - pure thinking or thinking+tools as needed
 
 Parameters explained:
 - thought: Your current thinking content for this step
 - stepNumber: Current step number (starts from 1, can exceed totalSteps)
 - totalSteps: Estimated total steps needed (can be adjusted dynamically)
 - nextStepNeeded: Whether another step is needed (false to terminate)
-- phase: Current phase - must be 'thinking', 'tool_call', or 'analysis'
+- phase: Current phase - 'thinking', 'tool_call', or 'analysis'
 - toolCall: Tool information (required when phase='tool_call')
   * toolName: Name of the tool to execute
   * parameters: Tool parameters as key-value pairs
@@ -76,20 +62,14 @@ Parameters explained:
 
 You should:
 1. Start with an initial estimate of totalSteps
-2. Choose your mode:
-   - Sequential: Use only phase='thinking' for pure reasoning tasks
-   - Interleaved: Use phase='thinking', 'tool_call', 'analysis' when tools are needed
-3. Use 'thinking' phase to analyze and plan
-4. Use 'tool_call' phase when you need external information (switches to interleaved mode)
-5. Use 'analysis' phase to process tool results
-6. Adjust totalSteps dynamically if needed
-7. Create branches to explore multiple possibilities
-8. Mark revisions when correcting previous reasoning
-9. Set nextStepNeeded=false when the task is complete
-10. Handle tool failures gracefully and adjust strategy
-11. Keep track of the cycle: 
-    - Sequential: think → think → think → complete
-    - Interleaved: think → call → analyze → think → call → analyze → complete`,
+2. Use phase='thinking' for reasoning (works like sequential thinking)
+3. Use phase='tool_call' when you need to execute tools
+4. Use phase='analysis' to process tool results
+5. Adjust totalSteps dynamically if needed
+6. Create branches to explore multiple possibilities
+7. Mark revisions when correcting previous reasoning
+8. Set nextStepNeeded=false when the task is complete
+9. Handle tool failures gracefully and adjust strategy`,
     inputSchema: {
       thought: z.string().describe("Your current thinking content"),
       stepNumber: z
