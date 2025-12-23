@@ -1,6 +1,6 @@
 {
   "name": "@jochenyang/interleaved-thinking",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for interleaved sequential thinking with dynamic tool calling",
   "license": "MIT",
   "mcpName": "io.github.jochenyang/interleaved-thinking",

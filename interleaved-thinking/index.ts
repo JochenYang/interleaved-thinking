@@ -127,32 +127,28 @@ You should:
             }
             return val;
           },
-          z
-            .object({
-              toolName: z.string().describe("Name of the tool to call"),
-              parameters: z
-                .record(z.string(), z.any())
-                .describe("Tool parameters as key-value pairs"),
-              metadata: z
-                .object({
-                  timeout: z
-                    .number()
-                    .optional()
-                    .describe("Timeout in milliseconds"),
-                  retryCount: z
-                    .number()
-                    .optional()
-                    .describe("Number of retries"),
-                  priority: z
-                    .enum(["high", "normal", "low"])
-                    .optional()
-                    .describe("Execution priority"),
-                })
-                .optional()
-                .describe("Optional metadata"),
-            })
-            .optional()
+          z.object({
+            toolName: z.string().describe("Name of the tool to call"),
+            parameters: z
+              .record(z.string(), z.any())
+              .describe("Tool parameters as key-value pairs"),
+            metadata: z
+              .object({
+                timeout: z
+                  .number()
+                  .optional()
+                  .describe("Timeout in milliseconds"),
+                retryCount: z.number().optional().describe("Number of retries"),
+                priority: z
+                  .enum(["high", "normal", "low"])
+                  .optional()
+                  .describe("Execution priority"),
+              })
+              .optional()
+              .describe("Optional metadata"),
+          })
         )
+        .optional()
         .describe("Tool call information (required when phase='tool_call')"),
       isRevision: z
         .boolean()
