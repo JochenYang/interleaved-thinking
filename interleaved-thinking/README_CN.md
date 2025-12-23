@@ -54,6 +54,25 @@
 
 ## 配置
 
+### 在 Claude Code CLI 中使用
+
+将以下内容添加到 Claude Code CLI MCP 设置：
+
+```json
+{
+  "interleaved-thinking": {
+    "command": "cmd",
+    "args": [
+      "/c",
+      "npx",
+      "@jochenyang/interleaved-thinking@latest"
+    ],
+    "env": {},
+    "type": "stdio"
+  }
+}
+```
+
 ### 在 Cursor 中使用
 
 将以下内容添加到 Cursor MCP 设置：

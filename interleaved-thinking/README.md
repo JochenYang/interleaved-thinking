@@ -54,6 +54,25 @@ Facilitates interleaved sequential thinking with dynamic tool calling.
 
 ### Configuration
 
+#### Usage with Claude Code CLI
+
+Add this to your Claude Code CLI MCP settings:
+
+```json
+{
+  "interleaved-thinking": {
+    "command": "cmd",
+    "args": [
+      "/c",
+      "npx",
+      "@jochenyang/interleaved-thinking@latest"
+    ],
+    "env": {},
+    "type": "stdio"
+  }
+}
+```
+
 #### Usage with Cursor
 
 Add this to your Cursor MCP settings:
