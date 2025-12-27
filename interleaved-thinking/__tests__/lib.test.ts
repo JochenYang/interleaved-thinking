@@ -133,21 +133,20 @@ describe("InterleavedThinkingServer", () => {
   });
 
   describe("Error handling", () => {
-    it("should return error for missing phase", async () => {
+    it("should auto-infer phase when not provided", async () => {
       const input = {
-        thought: "Test",
+        thought: "Test auto-inference",
         stepNumber: 1,
         totalSteps: 1,
         nextStepNeeded: false,
-        // @ts-expect-error - intentionally missing phase
-        phase: undefined,
+        // Phase is omitted - should be auto-inferred as 'thinking'
       };
 
       const result = await server.processStep(input);
-      expect(result.isError).toBe(true);
+      expect(result.isError).toBeUndefined();
 
       const data = JSON.parse(result.content[0].text);
-      expect(data.error.type).toBe("ValidationError");
+      expect(data.phase).toBe("thinking");
     });
 
     it("should return error for missing toolCall in tool_call phase", async () => {
@@ -162,6 +161,83 @@ describe("InterleavedThinkingServer", () => {
 
       const result = await server.processStep(input);
       expect(result.isError).toBe(true);
+    });
+  });
+
+  describe("Automatic phase inference", () => {
+    it("should infer 'thinking' phase by default", async () => {
+      const input = {
+        thought: "Default thinking",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+      };
+
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.phase).toBe("thinking");
+    });
+
+    it("should infer 'tool_call' phase when toolCall is provided", async () => {
+      const input = {
+        thought: "Calling a tool",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        toolCall: {
+          toolName: "test_tool",
+          parameters: { key: "value" },
+        },
+      };
+
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.phase).toBe("tool_call");
+    });
+
+    it("should infer 'analysis' phase after tool_call", async () => {
+      // First, execute a tool call
+      await server.processStep({
+        thought: "Calling a tool",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        toolCall: {
+          toolName: "test_tool",
+          parameters: { key: "value" },
+        },
+      });
+
+      // Then, the next step should be inferred as analysis
+      const input = {
+        thought: "Analyzing results",
+        stepNumber: 2,
+        totalSteps: 3,
+        nextStepNeeded: true,
+      };
+
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.phase).toBe("analysis");
+    });
+
+    it("should respect explicit phase even when it could be inferred", async () => {
+      const input = {
+        thought: "Explicit thinking",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        phase: "thinking" as const,
+        toolCall: {
+          toolName: "test_tool",
+          parameters: { key: "value" },
+        },
+      };
+
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+      // Should use explicit phase, not inferred
+      expect(data.phase).toBe("thinking");
     });
   });
 });

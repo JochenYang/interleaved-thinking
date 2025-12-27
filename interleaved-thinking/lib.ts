@@ -52,7 +52,8 @@ export interface InterleavedStepData {
   needsMoreSteps?: boolean;
 
   // Interleaved thinking specific fields
-  phase: ThoughtPhase;
+  // Phase is now optional - will be auto-inferred if not provided
+  phase?: ThoughtPhase;
   toolCall?: ToolCallData;
   toolResult?: ToolResultData;
 }
@@ -521,12 +522,41 @@ export class InterleavedThinkingServer {
   }
 
   /**
+   * Infer the phase based on input and history
+   */
+  private inferPhase(input: InterleavedStepData): ThoughtPhase {
+    // If phase is explicitly provided, use it
+    if (input.phase) {
+      return input.phase;
+    }
+
+    // If toolCall is provided, it's a tool_call phase
+    if (input.toolCall) {
+      return "tool_call";
+    }
+
+    // If previous step was a tool_call, this is analysis phase
+    const lastStep = this.stateManager.getStep(input.stepNumber - 1);
+    if (lastStep?.phase === "tool_call") {
+      return "analysis";
+    }
+
+    // Default to thinking phase
+    return "thinking";
+  }
+
+  /**
    * Process a step in the interleaved thinking process
    */
   public async processStep(input: InterleavedStepData): Promise<ProcessResult> {
     try {
       // Validate required fields
       this.validateInput(input);
+
+      // Auto-infer phase if not provided
+      if (!input.phase) {
+        input.phase = this.inferPhase(input);
+      }
 
       // Auto-adjust totalSteps if needed
       if (input.stepNumber > input.totalSteps) {
@@ -628,10 +658,6 @@ export class InterleavedThinkingServer {
    * Validate input data
    */
   private validateInput(input: InterleavedStepData): void {
-    if (!input.phase) {
-      throw new Error("phase is required");
-    }
-
     if (!input.stepNumber || input.stepNumber < 1) {
       throw new Error("stepNumber must be a positive integer");
     }
@@ -644,7 +670,8 @@ export class InterleavedThinkingServer {
       throw new Error("nextStepNeeded is required");
     }
 
-    if (!["thinking", "tool_call", "analysis"].includes(input.phase)) {
+    // Phase is now optional - will be inferred if not provided
+    if (input.phase && !["thinking", "tool_call", "analysis"].includes(input.phase)) {
       throw new Error("phase must be one of: thinking, tool_call, analysis");
     }
   }

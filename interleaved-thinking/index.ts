@@ -7,7 +7,7 @@ import { InterleavedThinkingServer } from "./lib.js";
 
 const server = new McpServer({
   name: "interleaved-thinking",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 const thinkingServer = new InterleavedThinkingServer();
@@ -21,50 +21,57 @@ This tool helps analyze complex problems through a flexible process that combine
 Each step can include pure thinking, tool execution, or result analysis as understanding deepens.
 
 When to use this tool:
-- Breaking down complex problems that require multiple steps
+RECOMMENDED for:
 - Tasks that need external information or tool execution during reasoning
 - Problems where strategy needs adjustment based on intermediate results
-- Analysis that requires verification through tool calls
-- Debugging and exploration tasks
-- Problems where the full scope is not clear initially
 - Situations requiring iterative "think-execute-reflect" cycles
+- Analysis that requires verification through tool calls
+- Debugging and exploration tasks with dynamic information gathering
+
+NOT RECOMMENDED for:
+- Pure logical reasoning without tool calls (use sequential-thinking instead)
+- Direct execution of a single tool (call that tool directly)
+- Simple linear tasks that don't require iteration
 
 Key features:
-- Flexible three-phase cycle: thinking, tool execution, and analysis
-- Can work as pure sequential thinking (no tools) or interleaved mode (with tools)
-- Dynamic strategy adjustment based on execution results
-- Branch exploration for alternative approaches
-- Revision support for correcting previous reasoning
-- Complete history tracking of thoughts and tool calls
-- Automatic mode selection based on your needs
+- Automatic phase detection: No need to specify phase - it's inferred automatically
+- Flexible workflow: Can work as pure sequential thinking or interleaved mode with tools
+- Dynamic strategy adjustment: Adapt based on execution results
+- Branch exploration: Explore alternative approaches
+- Revision support: Correct previous reasoning
+- Complete history tracking: Record all thoughts and tool calls
 
-How it works:
-- Use phase='thinking' for pure reasoning steps (like sequential thinking)
-- Use phase='tool_call' when you need to execute external tools
-- Use phase='analysis' to process and reflect on tool results
-- The tool adapts automatically - pure thinking or thinking+tools as needed
+How it works (SIMPLIFIED):
+1. Just thinking: Provide thought + step info, automatically enters 'thinking' phase
+2. Need a tool: Add toolCall parameter, automatically enters 'tool_call' phase
+3. After tool execution: Next step automatically enters 'analysis' phase
+4. Advanced control: Optionally specify phase explicitly for fine-grained control
 
 Parameters explained:
 - thought: Your current thinking content for this step
 - stepNumber: Current step number (starts from 1, can exceed totalSteps)
 - totalSteps: Estimated total steps needed (can be adjusted dynamically)
 - nextStepNeeded: Whether another step is needed (false to terminate)
-- phase: Current phase - 'thinking', 'tool_call', or 'analysis'
-- toolCall: Tool information (required when phase='tool_call')
+- phase (OPTIONAL): Current phase - 'thinking', 'tool_call', or 'analysis'
+  * If omitted, phase is automatically inferred based on context
+  * Provide toolCall: auto-detected as 'tool_call'
+  * After tool_call: auto-detected as 'analysis'
+  * Otherwise: defaults to 'thinking'
+- toolCall (OPTIONAL): Tool information - when provided, automatically triggers tool execution
   * toolName: Name of the tool to execute
   * parameters: Tool parameters as key-value pairs
   * metadata: Optional timeout, retryCount, priority
-- isRevision: Whether this step revises previous reasoning
-- revisesStep: Which step number is being reconsidered
-- branchFromStep: Branching point step number for exploring alternatives
-- branchId: Unique identifier for the branch
-- needsMoreSteps: Set true if you realize more steps are needed
+- isRevision (OPTIONAL): Whether this step revises previous reasoning
+- revisesStep (OPTIONAL): Which step number is being reconsidered
+- branchFromStep (OPTIONAL): Branching point step number for exploring alternatives
+- branchId (OPTIONAL): Unique identifier for the branch
+- needsMoreSteps (OPTIONAL): Set true if you realize more steps are needed
 
 You should:
 1. Start with an initial estimate of totalSteps
-2. Use phase='thinking' for reasoning (works like sequential thinking)
-3. Use phase='tool_call' when you need to execute tools
-4. Use phase='analysis' to process tool results
+2. For pure thinking: Just provide thought + step info (phase auto-inferred)
+3. For tool execution: Add toolCall parameter (phase auto-inferred)
+4. For explicit control: Optionally specify phase parameter
 5. Adjust totalSteps dynamically if needed
 6. Create branches to explore multiple possibilities
 7. Mark revisions when correcting previous reasoning
@@ -89,8 +96,9 @@ You should:
           z.literal("tool_call"),
           z.literal("analysis"),
         ])
+        .optional()
         .describe(
-          "Current phase: 'thinking' for reasoning, 'tool_call' for tool execution, 'analysis' for result processing"
+          "OPTIONAL: Current phase - auto-inferred if not provided. 'thinking' for reasoning, 'tool_call' for tool execution, 'analysis' for result processing. If omitted: toolCall present → 'tool_call', after tool_call → 'analysis', otherwise → 'thinking'"
         ),
       toolCall: z
         .preprocess(

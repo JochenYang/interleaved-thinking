@@ -8,6 +8,8 @@ An MCP server implementation that enables AI to perform interleaved sequential t
 
 ### Features
 
+- **Automatic Phase Detection**: No need to specify phase - automatically inferred based on context
+- **Simplified API**: Works like sequential-thinking but with tool execution capabilities
 - **Three-Phase Interleaved Execution**: Seamlessly switch between thinking, tool calling, and analysis phases
 - **Dynamic Tool Calling**: Execute external tools during the reasoning process and adjust strategy based on results
 - **Context Continuity**: Maintain complete context across the entire interleaved cycle
@@ -33,19 +35,29 @@ This tool is designed for:
 Facilitates interleaved sequential thinking with dynamic tool calling.
 
 **Core Parameters:**
+
 - `thought` (string): Your current thinking content
 - `stepNumber` (integer): Current step number (starts from 1)
 - `totalSteps` (integer): Estimated total steps needed
 - `nextStepNeeded` (boolean): Whether another step is needed
-- `phase` (enum): Current phase - 'thinking', 'tool_call', or 'analysis'
 
-**Tool Call Parameters (when phase='tool_call'):**
-- `toolCall` (object):
+**Phase Control (OPTIONAL - Auto-inferred if omitted):**
+
+- `phase` (enum, optional): Current phase - 'thinking', 'tool_call', or 'analysis'
+  - If omitted, automatically inferred:
+    - Provide `toolCall` → auto-detected as 'tool_call'
+    - After 'tool_call' → auto-detected as 'analysis'
+    - Otherwise → defaults to 'thinking'
+
+**Tool Call Parameters (triggers tool execution when provided):**
+
+- `toolCall` (object, optional):
   - `toolName` (string): Name of the tool to execute
   - `parameters` (object): Tool parameters as key-value pairs
   - `metadata` (object, optional): timeout, retryCount, priority
 
-**Optional Parameters:**
+**Advanced Parameters (Optional):**
+
 - `isRevision` (boolean): Whether this revises previous reasoning
 - `revisesStep` (integer): Which step is being reconsidered
 - `branchFromStep` (integer): Branching point step number
@@ -166,23 +178,23 @@ docker build -t jochenyang/interleaved-thinking -f Dockerfile .
 
 ### Example Usage
 
+#### Simple Mode (Automatic Phase Detection)
+
 ```typescript
-// Phase 1: Thinking
+// Step 1: Just thinking (phase auto-inferred as 'thinking')
 {
   "thought": "I need to analyze this problem step by step",
   "stepNumber": 1,
   "totalSteps": 5,
-  "nextStepNeeded": true,
-  "phase": "thinking"
+  "nextStepNeeded": true
 }
 
-// Phase 2: Tool Call
+// Step 2: Tool call (phase auto-inferred as 'tool_call' because toolCall is provided)
 {
   "thought": "Now I need to fetch some data",
   "stepNumber": 2,
   "totalSteps": 5,
   "nextStepNeeded": true,
-  "phase": "tool_call",
   "toolCall": {
     "toolName": "fetch_data",
     "parameters": {
@@ -191,13 +203,25 @@ docker build -t jochenyang/interleaved-thinking -f Dockerfile .
   }
 }
 
-// Phase 3: Analysis
+// Step 3: Analysis (phase auto-inferred as 'analysis' because previous step was tool_call)
 {
   "thought": "Based on the tool results, I can now conclude...",
   "stepNumber": 3,
   "totalSteps": 5,
-  "nextStepNeeded": false,
-  "phase": "analysis"
+  "nextStepNeeded": false
+}
+```
+
+#### Advanced Mode (Explicit Phase Control)
+
+```typescript
+// You can still explicitly specify phase for fine-grained control
+{
+  "thought": "I want to explicitly control the phase",
+  "stepNumber": 1,
+  "totalSteps": 3,
+  "nextStepNeeded": true,
+  "phase": "thinking"  // Explicitly set phase
 }
 ```
 
