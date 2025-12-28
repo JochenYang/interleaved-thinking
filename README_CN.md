@@ -30,7 +30,7 @@
 
 ## 工具
 
-### interleavedthinking
+### interleaved-thinking
 
 促进带有动态工具调用的交错顺序思维。
 

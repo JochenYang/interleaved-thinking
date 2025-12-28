@@ -30,7 +30,7 @@ This tool is designed for:
 
 ### Tool
 
-#### interleavedthinking
+#### interleaved-thinking
 
 Facilitates interleaved sequential thinking with dynamic tool calling.
 

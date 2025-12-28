@@ -7,13 +7,13 @@ import { InterleavedThinkingServer } from "./lib.js";
 
 const server = new McpServer({
   name: "interleaved-thinking",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 const thinkingServer = new InterleavedThinkingServer();
 
 server.registerTool(
-  "interleavedthinking",
+  "interleaved-thinking",
   {
     title: "Interleaved Sequential Thinking",
     description: `A powerful tool for dynamic problem-solving through structured thinking and tool execution.
