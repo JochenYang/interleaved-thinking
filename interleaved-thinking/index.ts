@@ -7,7 +7,7 @@ import { InterleavedThinkingServer } from "./lib.js";
 
 const server = new McpServer({
   name: "interleaved-thinking",
-  version: "0.3.0",
+  version: "0.3.1",
 });
 
 const thinkingServer = new InterleavedThinkingServer();
@@ -16,9 +16,7 @@ server.registerTool(
   "interleaved-thinking",
   {
     title: "Interleaved Sequential Thinking",
-    description: `A powerful tool for dynamic problem-solving through structured thinking and tool execution.
-This tool helps analyze complex problems through a flexible process that combines reasoning with action.
-Each step can include pure thinking, tool execution, or result analysis as understanding deepens.
+    description: `A powerful tool for dynamic problem-solving through structured thinking and tool execution. This tool helps analyze complex problems through a flexible process that combines reasoning with action. Each step can include pure thinking, tool execution, or result analysis as understanding deepens.
 
 When to use this tool:
 RECOMMENDED for:
@@ -41,42 +39,20 @@ Key features:
 - Revision support: Correct previous reasoning
 - Complete history tracking: Record all thoughts and tool calls
 
-How it works (SIMPLIFIED):
+How it works:
 1. Just thinking: Provide thought + step info, automatically enters 'thinking' phase
 2. Need a tool: Add toolCall parameter, automatically enters 'tool_call' phase
 3. After tool execution: Next step automatically enters 'analysis' phase
 4. Advanced control: Optionally specify phase explicitly for fine-grained control
 
-Parameters explained:
-- thought: Your current thinking content for this step
-- stepNumber: Current step number (starts from 1, can exceed totalSteps)
-- totalSteps: Estimated total steps needed (can be adjusted dynamically)
-- nextStepNeeded: Whether another step is needed (false to terminate)
-- phase (OPTIONAL): Current phase - 'thinking', 'tool_call', or 'analysis'
-  * If omitted, phase is automatically inferred based on context
-  * Provide toolCall: auto-detected as 'tool_call'
-  * After tool_call: auto-detected as 'analysis'
-  * Otherwise: defaults to 'thinking'
-- toolCall (OPTIONAL): Tool information - when provided, automatically triggers tool execution
-  * toolName: Name of the tool to execute
-  * parameters: Tool parameters as key-value pairs
-  * metadata: Optional timeout, retryCount, priority
-- isRevision (OPTIONAL): Whether this step revises previous reasoning
-- revisesStep (OPTIONAL): Which step number is being reconsidered
-- branchFromStep (OPTIONAL): Branching point step number for exploring alternatives
-- branchId (OPTIONAL): Unique identifier for the branch
-- needsMoreSteps (OPTIONAL): Set true if you realize more steps are needed
-
 You should:
-1. Start with an initial estimate of totalSteps
-2. For pure thinking: Just provide thought + step info (phase auto-inferred)
-3. For tool execution: Add toolCall parameter (phase auto-inferred)
-4. For explicit control: Optionally specify phase parameter
-5. Adjust totalSteps dynamically if needed
-6. Create branches to explore multiple possibilities
-7. Mark revisions when correcting previous reasoning
-8. Set nextStepNeeded=false when the task is complete
-9. Handle tool failures gracefully and adjust strategy`,
+- Start with an initial estimate of totalSteps
+- For pure thinking: Just provide thought + step info (phase auto-inferred)
+- For tool execution: Add toolCall parameter (phase auto-inferred)
+- Adjust totalSteps dynamically if needed
+- Create branches to explore multiple possibilities
+- Mark revisions when correcting previous reasoning
+- Set nextStepNeeded=false when the task is complete`,
     inputSchema: {
       thought: z.string().describe("Your current thinking content"),
       stepNumber: z
