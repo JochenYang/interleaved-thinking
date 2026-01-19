@@ -16,43 +16,57 @@ server.registerTool(
   "interleaved-thinking",
   {
     title: "Interleaved Sequential Thinking",
-    description: `A powerful tool for dynamic problem-solving through structured thinking and tool execution. This tool helps analyze complex problems through a flexible process that combines reasoning with action. Each step can include pure thinking, tool execution, or result analysis as understanding deepens.
+    description: `A dynamic and reflective problem-solving tool that combines structured thinking with tool execution.
+This tool helps analyze complex problems through a flexible thinking process that adapts and evolves as understanding deepens.
+Each step can include pure reasoning, tool calls, or result analysis, creating an iterative "think-execute-reflect" cycle.
 
 When to use this tool:
-RECOMMENDED for:
-- Tasks that need external information or tool execution during reasoning
-- Problems where strategy needs adjustment based on intermediate results
-- Situations requiring iterative "think-execute-reflect" cycles
-- Analysis that requires verification through tool calls
-- Debugging and exploration tasks with dynamic information gathering
-
-NOT RECOMMENDED for:
-- Pure logical reasoning without tool calls (use sequential-thinking instead)
-- Direct execution of a single tool (call that tool directly)
-- Simple linear tasks that don't require iteration
+- Breaking down complex problems that require external information
+- Planning and design with room for strategy adjustment based on results
+- Analysis that needs verification through tool execution
+- Problems where the full scope might not be clear initially
+- Tasks requiring multiple tool calls with dynamic information gathering
+- Situations where irrelevant information needs to be filtered out
+- Debugging and exploration with iterative refinement
 
 Key features:
-- Automatic phase detection: No need to specify phase - it's inferred automatically
-- Flexible workflow: Can work as pure sequential thinking or interleaved mode with tools
-- Dynamic strategy adjustment: Adapt based on execution results
-- Branch exploration: Explore alternative approaches
-- Revision support: Correct previous reasoning
-- Complete history tracking: Record all thoughts and tool calls
+- Automatic phase detection without manual specification
+- Flexible workflow: pure sequential thinking OR interleaved with tools
+- Dynamic strategy adjustment based on execution results
+- Question or revise previous thoughts as understanding evolves
+- Branch exploration for alternative approaches
+- Complete history tracking of thoughts and tool executions
 
-How it works:
-1. Just thinking: Provide thought + step info, automatically enters 'thinking' phase
-2. Need a tool: Add toolCall parameter, automatically enters 'tool_call' phase
-3. After tool execution: Next step automatically enters 'analysis' phase
-4. Advanced control: Optionally specify phase explicitly for fine-grained control
+Parameters explained:
+- thought: Your current reasoning step, which can include:
+  * Regular analytical steps
+  * Revisions of previous reasoning
+  * Questions about previous decisions
+  * Realizations about needing more analysis
+  * Changes in approach
+  * Hypothesis generation and verification
+- nextStepNeeded: True if you need more thinking, even if at what seemed like the end
+- stepNumber: Current number in sequence (can go beyond initial total if needed)
+- totalSteps: Current estimate of steps needed (can be adjusted up/down)
+- isRevision: A boolean indicating if this step revises previous thinking
+- revisesStep: If isRevision is true, which step number is being reconsidered
+- branchFromStep: If branching, which step number is the branching point
+- branchId: Identifier for the current branch (if any)
+- needsMoreSteps: If reaching end but realizing more steps needed
+- toolCall: Tool execution information (auto-inferred when provided)
+- phase: Optional phase specification (auto-inferred if omitted)
 
 You should:
-- Start with an initial estimate of totalSteps
-- For pure thinking: Just provide thought + step info (phase auto-inferred)
-- For tool execution: Add toolCall parameter (phase auto-inferred)
-- Adjust totalSteps dynamically if needed
-- Create branches to explore multiple possibilities
-- Mark revisions when correcting previous reasoning
-- Set nextStepNeeded=false when the task is complete`,
+1. Start with an initial estimate of needed steps, but be ready to adjust
+2. Feel free to question or revise previous reasoning
+3. Don't hesitate to add more steps if needed, even at the "end"
+4. Express uncertainty when present
+5. Mark steps that revise previous thinking or branch into new paths
+6. Ignore information that is irrelevant to the current step
+7. Generate solution hypotheses when appropriate
+8. Verify hypotheses through tool execution when needed
+9. Repeat the process until satisfied with the solution
+10. Set nextStepNeeded to false when truly done and satisfactory answer is reached`,
     inputSchema: {
       thought: z.string().describe("Your current thinking content"),
       stepNumber: z
