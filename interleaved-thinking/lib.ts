@@ -604,13 +604,15 @@ export class InterleavedThinkingServer {
 
       // Build response
       const history = this.stateManager.getHistory();
+      const nextHint = this.generateNextHint(input, toolResult);
       const response = {
         stepNumber: input.stepNumber,
         totalSteps: input.totalSteps,
         nextStepNeeded: input.nextStepNeeded,
+        phase: input.phase,
+        nextHint,
         branches: Object.keys(history.branches),
         stepHistoryLength: history.steps.length,
-        phase: input.phase,
         ...(toolResult && {
           toolResult: {
             success: toolResult.success,
@@ -630,6 +632,43 @@ export class InterleavedThinkingServer {
     } catch (error) {
       return this.handleError(error);
     }
+  }
+
+  /**
+   * Generate next step hint based on current phase and input
+   */
+  private generateNextHint(
+    input: InterleavedStepData,
+    toolResult?: ToolResultData
+  ): string {
+    const { phase, stepNumber, nextStepNeeded, toolCall } = input;
+
+    // Phase-specific hints
+    if (toolCall) {
+      return `Execute ${toolCall.toolName}, then call this tool again for reflection`;
+    }
+
+    if (phase === "thinking" && nextStepNeeded) {
+      return `Continue to next step (step ${stepNumber + 1}) or call a tool for information`;
+    }
+
+    if (phase === "tool_call") {
+      return `Call interleaved-thinking with phase=analysis to analyze tool result`;
+    }
+
+    if (phase === "analysis") {
+      if (nextStepNeeded) {
+        return `Continue reasoning or call tools again as needed`;
+      }
+      return `Reasoning complete - ready to return final answer`;
+    }
+
+    // Default hint based on nextStepNeeded
+    if (nextStepNeeded) {
+      return `Continue to next step`;
+    }
+
+    return "Thinking process complete";
   }
 
   /**

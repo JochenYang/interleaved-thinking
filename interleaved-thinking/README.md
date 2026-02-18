@@ -1,5 +1,9 @@
 # Interleaved Sequential Thinking MCP Server
 
+[![npm version](https://img.shields.io/npm/v/@jochenyang/interleaved-thinking)](https://www.npmjs.com/package/@jochenyang/interleaved-thinking)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP Version](https://img.shields.io/badge/MCP-2025--11--25-brightgreen)](https://modelcontextprotocol.io)
+
 [English](./README.md) | [中文](./README_CN.md)
 
 ---
