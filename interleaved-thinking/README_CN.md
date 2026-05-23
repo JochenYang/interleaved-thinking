@@ -41,9 +41,13 @@
 - `stepNumber` (整数): 当前步骤编号（从 1 开始）
 - `totalSteps` (整数): 预估所需总步骤数
 - `nextStepNeeded` (布尔值): 是否需要下一步
-- `phase` (枚举): 当前阶段 - 'thinking'、'tool_call' 或 'analysis'
+- `phase` (枚举，可选): 当前阶段 - 'thinking'、'tool_call' 或 'analysis'
+  如果不提供，将自动推断：
+  - 如果提供了 `toolCall`，推断为 `'tool_call'`
+  - 如果上一步是 `tool_call`，推断为 `'analysis'`
+  - 否则默认为 `'thinking'`
 
-**工具调用参数（当 phase='tool_call' 时）：**
+**工具调用参数（当 phase='tool_call' 或提供了 toolCall 时）：**
 - `toolCall` (对象):
   - `toolName` (字符串): 要执行的工具名称
   - `parameters` (对象): 工具参数（键值对）
@@ -180,13 +184,13 @@ docker build -t jochenyang/interleaved-thinking -f Dockerfile .
   "phase": "thinking"
 }
 
-// 阶段 2: 工具调用
+// 阶段 2: 工具调用（自动推断 phase 为 tool_call）
 {
   "thought": "现在我需要获取一些数据",
   "stepNumber": 2,
   "totalSteps": 5,
   "nextStepNeeded": true,
-  "phase": "tool_call",
+  // 自动推断：由于提供了 toolCall，phase 自动设为 'tool_call'
   "toolCall": {
     "toolName": "fetch_data",
     "parameters": {
@@ -195,13 +199,22 @@ docker build -t jochenyang/interleaved-thinking -f Dockerfile .
   }
 }
 
-// 阶段 3: 分析
+// 阶段 3: 分析（自动推断 phase 为 analysis）
 {
   "thought": "根据工具结果，我现在可以得出结论...",
   "stepNumber": 3,
   "totalSteps": 5,
+  "nextStepNeeded": false
+  // 自动推断：由于上一步是 tool_call，phase 自动设为 'analysis'
+}
+
+// 如果所有步骤已完成，最后一步返回：
+{
+  "thought": "最终结论如下：...",
+  "stepNumber": 4,
+  "totalSteps": 4,
   "nextStepNeeded": false,
-  "phase": "analysis"
+  "phase": "thinking"
 }
 ```
 

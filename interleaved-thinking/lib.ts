@@ -129,6 +129,9 @@ export class ToolCallManager {
   private defaultTimeout: number;
   private enableCache: boolean;
   private callCount: number = 0;
+  private successCount: number = 0;
+  private failCount: number = 0;
+  private totalExecTime: number = 0;
   private resultCache: Map<string, ToolResultData> = new Map();
   private mockResults?: Map<string, ToolResultData>;
 
@@ -179,17 +182,24 @@ export class ToolCallManager {
         this.createTimeoutPromise(timeout),
       ]);
 
-      // Cache the result
-      if (this.enableCache && result.success) {
-        const cacheKey = this.getCacheKey(toolCall);
-        this.resultCache.set(cacheKey, result);
-      }
-
-      return {
+      const finalResult: ToolResultData = {
         ...result,
         executionTime: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       };
+
+      // Cache the result
+      if (this.enableCache && finalResult.success) {
+        const cacheKey = this.getCacheKey(toolCall);
+        this.resultCache.set(cacheKey, finalResult);
+      }
+
+      // Update statistics
+      this.successCount += finalResult.success ? 1 : 0;
+      this.failCount += finalResult.success ? 0 : 1;
+      this.totalExecTime += finalResult.executionTime;
+
+      return finalResult;
     } catch (error) {
       const result: ToolResultData = {
         toolName: toolCall.toolName,
@@ -208,6 +218,10 @@ export class ToolCallManager {
         executionTime: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       };
+
+      // Update statistics for failed calls
+      this.failCount++;
+      this.totalExecTime += result.executionTime;
 
       return result;
     }
@@ -256,24 +270,11 @@ export class ToolCallManager {
    * Get tool call statistics
    */
   public getStatistics(): ToolCallStatistics {
-    let successfulCalls = 0;
-    let failedCalls = 0;
-    let totalExecutionTime = 0;
-
-    for (const result of this.resultCache.values()) {
-      if (result.success) {
-        successfulCalls++;
-      } else {
-        failedCalls++;
-      }
-      totalExecutionTime += result.executionTime;
-    }
-
     return {
       totalCalls: this.callCount,
-      successfulCalls,
-      failedCalls,
-      totalExecutionTime,
+      successfulCalls: this.successCount,
+      failedCalls: this.failCount,
+      totalExecutionTime: this.totalExecTime,
     };
   }
 
@@ -282,6 +283,9 @@ export class ToolCallManager {
    */
   public reset(): void {
     this.callCount = 0;
+    this.successCount = 0;
+    this.failCount = 0;
+    this.totalExecTime = 0;
     this.resultCache.clear();
   }
 
@@ -478,15 +482,23 @@ export class Logger {
   }
 
   /**
+   * Strip ANSI escape codes from a string for length calculation
+   */
+  private stripAnsi(str: string): string {
+    return str.replace(/\x1b\[\d+m/g, "");
+  }
+
+  /**
    * Format content in a box
    */
   private formatBox(header: string, content: string): string {
-    const maxLength = Math.max(header.length, content.length) + 4;
+    const visibleHeader = this.stripAnsi(header);
+    const maxLength = Math.max(visibleHeader.length, content.length) + 4;
     const border = "─".repeat(maxLength);
 
     return `
 ┌${border}┐
-│ ${header.padEnd(maxLength - 2)} │
+│ ${header}${" ".repeat(maxLength - 2 - visibleHeader.length)} │
 ├${border}┤
 │ ${content.padEnd(maxLength - 2)} │
 └${border}┘`;
@@ -502,14 +514,16 @@ export class InterleavedThinkingServer {
   private logger: Logger;
   private config: ServerConfig;
 
+  private readonly defaultConfig: ServerConfig = {
+    maxToolCalls: 50,
+    defaultTimeout: 30000,
+    disableLogging: false,
+    enableResultCache: true,
+    testMode: false,
+  };
+
   constructor(config?: Partial<ServerConfig>) {
-    this.config = {
-      maxToolCalls: config?.maxToolCalls ?? 50,
-      defaultTimeout: config?.defaultTimeout ?? 30000,
-      disableLogging: config?.disableLogging ?? false,
-      enableResultCache: config?.enableResultCache ?? true,
-      testMode: config?.testMode ?? false,
-    };
+    this.config = { ...this.defaultConfig, ...config };
 
     this.toolCallManager = new ToolCallManager({
       maxToolCalls: this.config.maxToolCalls,
@@ -553,63 +567,66 @@ export class InterleavedThinkingServer {
       // Validate required fields
       this.validateInput(input);
 
+      // Create a shallow copy to avoid mutating the original input
+      const step = { ...input };
+
       // Auto-infer phase if not provided
-      if (!input.phase) {
-        input.phase = this.inferPhase(input);
+      if (!step.phase) {
+        step.phase = this.inferPhase(step);
       }
 
       // Auto-adjust totalSteps if needed
-      if (input.stepNumber > input.totalSteps) {
-        input.totalSteps = input.stepNumber;
+      if (step.stepNumber > step.totalSteps) {
+        step.totalSteps = step.stepNumber;
       }
 
       // Process based on phase
       let toolResult: ToolResultData | undefined;
 
-      switch (input.phase) {
+      switch (step.phase) {
         case "thinking":
-          this.logger.logThinkingStep(input);
+          this.logger.logThinkingStep(step);
           break;
 
         case "tool_call":
-          if (!input.toolCall) {
+          if (!step.toolCall) {
             throw new Error("toolCall is required for tool_call phase");
           }
-          this.logger.logToolCall(input.toolCall);
+          this.logger.logToolCall(step.toolCall);
           toolResult = await this.toolCallManager.executeToolCall(
-            input.toolCall
+            step.toolCall
           );
           this.logger.logToolResult(toolResult);
 
           // Record tool call
           this.stateManager.addToolCall({
-            stepNumber: input.stepNumber,
-            toolCall: input.toolCall,
+            stepNumber: step.stepNumber,
+            toolCall: step.toolCall,
             result: toolResult,
           });
 
-          // Add result to input for storage
-          input.toolResult = toolResult;
+          // Add result to step for storage
+          step.toolResult = toolResult;
           break;
 
         case "analysis":
-          this.logger.logAnalysisStep(input);
+          this.logger.logAnalysisStep(step);
           // Provide last tool result if available
           toolResult = this.stateManager.getLastToolResult();
           break;
       }
 
       // Add step to history
-      this.stateManager.addStep(input);
+      this.stateManager.addStep(step);
 
       // Build response
       const history = this.stateManager.getHistory();
-      const nextHint = this.generateNextHint(input, toolResult);
+      const nextHint = this.generateNextHint(step, toolResult);
       const response = {
-        stepNumber: input.stepNumber,
-        totalSteps: input.totalSteps,
-        nextStepNeeded: input.nextStepNeeded,
-        phase: input.phase,
+        stepNumber: step.stepNumber,
+        totalSteps: step.totalSteps,
+        nextStepNeeded: step.nextStepNeeded,
+        phase: step.phase,
         nextHint,
         branches: Object.keys(history.branches),
         stepHistoryLength: history.steps.length,
@@ -644,16 +661,19 @@ export class InterleavedThinkingServer {
     const { phase, stepNumber, nextStepNeeded, toolCall } = input;
 
     // Phase-specific hints
-    if (toolCall) {
-      return `Execute ${toolCall.toolName}, then call this tool again for reflection`;
+    if (phase === "tool_call") {
+      if (toolCall && toolResult) {
+        // Tool has been executed - suggest analysis
+        return `Call interleaved-thinking with phase=analysis to analyze tool result`;
+      }
+      if (toolCall) {
+        // Tool is pending execution
+        return `Execute ${toolCall.toolName}, then call this tool again for reflection`;
+      }
     }
 
     if (phase === "thinking" && nextStepNeeded) {
       return `Continue to next step (step ${stepNumber + 1}) or call a tool for information`;
-    }
-
-    if (phase === "tool_call") {
-      return `Call interleaved-thinking with phase=analysis to analyze tool result`;
     }
 
     if (phase === "analysis") {
@@ -697,6 +717,10 @@ export class InterleavedThinkingServer {
    * Validate input data
    */
   private validateInput(input: InterleavedStepData): void {
+    if (!input.thought || input.thought.trim().length === 0) {
+      throw new Error("thought is required and must be a non-empty string");
+    }
+
     if (!input.stepNumber || input.stepNumber < 1) {
       throw new Error("stepNumber must be a positive integer");
     }
@@ -729,7 +753,7 @@ export class InterleavedThinkingServer {
     } else if (errorMessage.includes("timeout")) {
       errorType = "TimeoutError";
       recoveryStrategy = "Use simpler tool or increase timeout";
-    } else if (errorMessage.includes("required")) {
+    } else if (errorMessage.includes("required") || errorMessage.includes("must be one of")) {
       errorType = "ValidationError";
       recoveryStrategy = "Provide all required fields";
     }
