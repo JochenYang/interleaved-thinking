@@ -151,7 +151,21 @@ For manual installation, add the configuration to `.vscode/mcp.json` in your wor
 
 ### Environment Variables
 
-- `DISABLE_THOUGHT_LOGGING`: Set to `true` to disable console logging (default: `false`)
+- `DISABLE_THOUGHT_LOGGING`: Set to `true` to disable console logging (default: `false`). Read at server startup; takes effect on the next `InterleavedThinkingServer` instance construction.
+
+### How Tool Execution Works
+
+This server is a **flow controller**, not a tool executor. It registers tool calls and tracks the interleaved think→tool_call→analysis loop, but it does NOT actually invoke external tools.
+
+**Round-trip protocol:**
+
+1. **tool_call phase** — your model supplies a `toolCall` (tool name + parameters). The server records the registration and responds with `toolResult.status === "pending"`. The tool itself is NOT executed by the server.
+2. **Host dispatches** — the MCP host (Claude/Cursor/etc.) takes the registered `toolCall`, invokes the actual tool on the appropriate provider, and obtains the real `result`.
+3. **analysis phase** — the host calls this tool again, now with `phase: "analysis"` and a `previousToolResult` field carrying the real payload. The server attaches the result to the in-memory history and exposes it to your model for reflection.
+
+The `previousToolResult` field carries the standard tool-result shape: `toolName`, `success`, `executionTime`, `timestamp`, optional `result`, optional `error` (with `type`, `message`, `recoveryStrategy`).
+
+This design keeps the reasoning loop and tool execution cleanly separated, so the same thinking flow can drive any tool provider the host supports.
 
 ### Building
 

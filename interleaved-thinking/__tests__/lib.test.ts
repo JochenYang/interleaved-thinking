@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import {
   InterleavedThinkingServer,
   ToolCallManager,
   StateManager,
   Logger,
+  type ToolResultData,
 } from "../lib.js";
 
 describe("InterleavedThinkingServer", () => {
@@ -55,6 +58,8 @@ describe("InterleavedThinkingServer", () => {
       expect(data.phase).toBe("tool_call");
       expect(data.toolResult).toBeDefined();
       expect(data.toolResult.success).toBe(true);
+      // P0-C: tool_call phase returns status='pending' (host will execute)
+      expect(data.toolResult.status).toBe("pending");
     });
 
     it("should process an analysis step", async () => {
@@ -87,35 +92,57 @@ describe("InterleavedThinkingServer", () => {
       expect(data.phase).toBe("analysis");
     });
 
-    it("should use injected mock results for tool calls", async () => {
-      const mockResults = new Map();
-      mockResults.set("mock_tool:{}", {
-        toolName: "mock_tool",
-        success: true,
-        result: { message: "Mocked!" },
-        executionTime: 5,
-        timestamp: new Date().toISOString(),
-      });
-      server.injectMockResults(mockResults);
-
-      const input = {
-        thought: "Using mock",
+    it("should accept previousToolResult from the MCP host (P0-C round-trip)", async () => {
+      // Step 1: tool_call phase registers a pending tool call
+      const callResult = await server.processStep({
+        thought: "Calling a tool via host",
         stepNumber: 1,
-        totalSteps: 2,
+        totalSteps: 3,
         nextStepNeeded: true,
         phase: "tool_call" as const,
         toolCall: {
-          toolName: "mock_tool",
-          parameters: {},
+          toolName: "real_tool",
+          parameters: { foo: "bar" },
         },
+      });
+      const callData = JSON.parse(callResult.content[0].text);
+      expect(callData.phase).toBe("tool_call");
+      expect(callData.toolResult.status).toBe("pending");
+      expect(callData.toolResult.success).toBe(true);
+
+      // Step 2: analysis phase, host returns the real result via previousToolResult
+      const hostResult: ToolResultData = {
+        toolName: "real_tool",
+        success: true,
+        status: "executed",
+        result: { data: "from real tool" },
+        executionTime: 42,
+        timestamp: new Date().toISOString(),
       };
 
-      const result = await server.processStep(input);
+      const result = await server.processStep({
+        thought: "Analyzing host result",
+        stepNumber: 2,
+        totalSteps: 3,
+        nextStepNeeded: false,
+        phase: "analysis" as const,
+        previousToolResult: hostResult,
+      });
       expect(result.isError).toBeUndefined();
 
       const data = JSON.parse(result.content[0].text);
+      expect(data.phase).toBe("analysis");
       expect(data.toolResult).toBeDefined();
-      expect(data.toolResult.success).toBe(true);
+      expect(data.toolResult.status).toBe("executed");
+      expect(data.toolResult.result).toEqual({ data: "from real tool" });
+      expect(data.toolResult.executionTime).toBe(42);
+
+      // The StateManager record should also have been updated
+      const history = server.getHistory();
+      expect(history.toolCalls[0].result.status).toBe("executed");
+      expect(history.toolCalls[0].result.result).toEqual({
+        data: "from real tool",
+      });
     });
   });
 
@@ -411,6 +438,72 @@ describe("InterleavedThinkingServer", () => {
     });
   });
 
+  describe("L2 soft guidance (nextHint phase tips)", () => {
+    it("should append a falsifiable-hypothesis tip on thinking phase", async () => {
+      const input = {
+        thought: "Let me reason about this",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        phase: "thinking" as const,
+      };
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+
+      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toMatch(/falsifiable hypothesis/i);
+      expect(data.nextHint).toMatch(/verification strategy/i);
+    });
+
+    it("should append a concrete-parameters tip on tool_call phase", async () => {
+      const input = {
+        thought: "Need to call a tool",
+        stepNumber: 1,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        phase: "tool_call" as const,
+        toolCall: { toolName: "fetch", parameters: { q: "x" } },
+      };
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+
+      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toMatch(/specific and concrete/i);
+    });
+
+    it("should append a cite-specific-values tip on analysis phase", async () => {
+      const input = {
+        thought: "Looking at the tool output",
+        stepNumber: 2,
+        totalSteps: 3,
+        nextStepNeeded: true,
+        phase: "analysis" as const,
+      };
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+
+      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toMatch(/Cite specific values/i);
+      expect(data.nextHint).toMatch(/result\./i);
+    });
+
+    it("should still emit a tip when phase is auto-inferred (no explicit phase)", async () => {
+      const input = {
+        thought: "Auto-inferred phase",
+        stepNumber: 1,
+        totalSteps: 2,
+        nextStepNeeded: true,
+        // no `phase` field — server should infer 'thinking'
+      };
+      const result = await server.processStep(input);
+      const data = JSON.parse(result.content[0].text);
+
+      expect(data.phase).toBe("thinking");
+      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toMatch(/falsifiable hypothesis/i);
+    });
+  });
+
   describe("Automatic phase inference", () => {
     it("should infer 'thinking' phase by default", async () => {
       const input = {
@@ -561,51 +654,69 @@ describe("ToolCallManager", () => {
     ).rejects.toThrow("Tool call limit reached");
   });
 
-  it("should handle timeout errors gracefully", async () => {
-    const timeoutManager = new ToolCallManager({
+  it("should register tool calls as pending (no execution, no timeout)", async () => {
+    // After P0-C, the manager no longer executes or times out tools.
+    // Even an extreme 1ms timeout must not affect the pending registration.
+    const noExecManager = new ToolCallManager({
       maxToolCalls: 5,
-      defaultTimeout: 1, // Very short timeout
+      defaultTimeout: 1,
       enableCache: true,
     });
 
-    const result = await timeoutManager.executeToolCall({
-      toolName: "slow_tool",
-      parameters: {},
+    const result = await noExecManager.executeToolCall({
+      toolName: "external_tool",
+      parameters: { key: "value" },
       metadata: { timeout: 1 },
     });
 
-    expect(result.success).toBe(false);
-    expect(result.error?.type).toBe("TimeoutError");
+    expect(result.status).toBe("pending");
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.toolName).toBe("external_tool");
   });
 
-  it("should track successful and failed calls separately in statistics", async () => {
+  it("should track pending registrations in statistics", async () => {
     const statsManager = new ToolCallManager({
       maxToolCalls: 10,
       defaultTimeout: 1000,
       enableCache: true,
     });
 
-    // First call succeeds
     await statsManager.executeToolCall({ toolName: "tool1", parameters: {} });
+    await statsManager.executeToolCall({ toolName: "tool2", parameters: {} });
 
-    // Second call will fail due to timeout
-    const timeoutManager = new ToolCallManager({
-      maxToolCalls: 10,
-      defaultTimeout: 1, // very short timeout
+    const stats = statsManager.getStatistics();
+    expect(stats.totalCalls).toBe(2);
+    expect(stats.successfulCalls).toBe(2);
+    expect(stats.failedCalls).toBe(0);
+  });
+
+  it("should expose getPendingToolCalls and markToolCallExecuted (P0-C API)", async () => {
+    const m = new ToolCallManager({
+      maxToolCalls: 5,
+      defaultTimeout: 1000,
       enableCache: true,
     });
 
-    const result = await timeoutManager.executeToolCall({
-      toolName: "slow_tool",
-      parameters: {},
-      metadata: { timeout: 1 },
-    });
-    expect(result.success).toBe(false);
+    await m.executeToolCall({ toolName: "a", parameters: { x: 1 } });
+    await m.executeToolCall({ toolName: "b", parameters: { y: 2 } });
 
-    const stats = timeoutManager.getStatistics();
-    expect(stats.totalCalls).toBe(1);
-    expect(stats.successfulCalls).toBe(0);
-    expect(stats.failedCalls).toBe(1);
+    const pending = m.getPendingToolCalls();
+    expect(pending).toHaveLength(2);
+    expect(pending.map((c) => c.toolName)).toEqual(["a", "b"]);
+
+    m.markToolCallExecuted(
+      { toolName: "a" },
+      {
+        toolName: "a",
+        success: true,
+        executionTime: 1,
+        timestamp: new Date().toISOString(),
+      }
+    );
+
+    expect(m.getPendingToolCalls()).toHaveLength(1);
+    expect(m.getPendingToolCalls()[0].toolName).toBe("b");
   });
 });
 
@@ -688,5 +799,187 @@ describe("Logger", () => {
     expect(output).toContain("┌");
     expect(output).toContain("└");
     consoleSpy.mockRestore();
+  });
+});
+
+describe("P0-A: toolResult schema transparency", () => {
+  let server: InterleavedThinkingServer;
+
+  beforeEach(() => {
+    server = new InterleavedThinkingServer({ disableLogging: true });
+  });
+
+  it("should expose the full toolResult (status, result, error) in the response", async () => {
+    // tool_call phase: pending registration should include status='pending'
+    // and the result payload (the host-bound message). This verifies the
+    // outputSchema was widened beyond {success, executionTime}.
+    const callResult = await server.processStep({
+      thought: "Calling with rich payload",
+      stepNumber: 1,
+      totalSteps: 2,
+      nextStepNeeded: true,
+      phase: "tool_call" as const,
+      toolCall: {
+        toolName: "external_search",
+        parameters: { q: "test", limit: 5 },
+      },
+    });
+    const callData = JSON.parse(callResult.content[0].text);
+    expect(callData.toolResult).toBeDefined();
+    expect(callData.toolResult.status).toBe("pending");
+    expect(callData.toolResult.success).toBe(true);
+    expect(callData.toolResult.executionTime).toBe(0);
+    // The new schema must allow result to be present in the response.
+    expect(callData.toolResult.result).toBeDefined();
+    expect(callData.toolResult.result.message).toContain("host");
+    expect(callData.toolResult.result.parameters).toEqual({
+      q: "test",
+      limit: 5,
+    });
+
+    // analysis phase: host-returned result must flow through verbatim.
+    const hostResult: ToolResultData = {
+      toolName: "external_search",
+      success: true,
+      status: "executed",
+      result: { hits: [{ id: 1, title: "doc" }] },
+      executionTime: 123,
+      timestamp: new Date().toISOString(),
+    };
+    const analysisResult = await server.processStep({
+      thought: "Analyzing search results",
+      stepNumber: 2,
+      totalSteps: 2,
+      nextStepNeeded: false,
+      phase: "analysis" as const,
+      previousToolResult: hostResult,
+    });
+    const analysisData = JSON.parse(analysisResult.content[0].text);
+    expect(analysisData.toolResult).toBeDefined();
+    expect(analysisData.toolResult.status).toBe("executed");
+    expect(analysisData.toolResult.result).toEqual({
+      hits: [{ id: 1, title: "doc" }],
+    });
+    expect(analysisData.toolResult.executionTime).toBe(123);
+  });
+
+  it("should expose the error field in the response when host returns a failure", async () => {
+    // Register a call first
+    await server.processStep({
+      thought: "Calling",
+      stepNumber: 1,
+      totalSteps: 2,
+      nextStepNeeded: true,
+      phase: "tool_call" as const,
+      toolCall: { toolName: "failing_tool", parameters: {} },
+    });
+
+    // Host returns a failure payload
+    const failure: ToolResultData = {
+      toolName: "failing_tool",
+      success: false,
+      status: "error",
+      executionTime: 10,
+      timestamp: new Date().toISOString(),
+      error: {
+        type: "UpstreamError",
+        message: "503 Service Unavailable",
+        recoveryStrategy: "Retry with backoff",
+      },
+    };
+    const result = await server.processStep({
+      thought: "Analyzing failure",
+      stepNumber: 2,
+      totalSteps: 2,
+      nextStepNeeded: false,
+      phase: "analysis" as const,
+      previousToolResult: failure,
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.toolResult.error).toBeDefined();
+    expect(data.toolResult.error.type).toBe("UpstreamError");
+    expect(data.toolResult.error.message).toBe("503 Service Unavailable");
+    expect(data.toolResult.error.recoveryStrategy).toBe("Retry with backoff");
+  });
+});
+
+describe("P0-B: tool annotations (MCP 2025-11-25 compliance)", () => {
+  it("should declare readOnlyHint, destructiveHint, idempotentHint, openWorldHint in index.ts", () => {
+    // The annotations field lives on the McpServer.registerTool config
+    // object in index.ts (no public export from lib.ts). We verify it
+    // by reading the source file as a string and asserting presence.
+    const indexPath = resolve(__dirname, "..", "index.ts");
+    const source = readFileSync(indexPath, "utf8");
+
+    expect(source).toMatch(/annotations\s*:\s*\{/);
+    expect(source).toMatch(/readOnlyHint\s*:\s*(true|false)/);
+    expect(source).toMatch(/destructiveHint\s*:\s*(true|false)/);
+    expect(source).toMatch(/idempotentHint\s*:\s*(true|false)/);
+    expect(source).toMatch(/openWorldHint\s*:\s*(true|false)/);
+  });
+});
+
+describe("P1-B: DISABLE_THOUGHT_LOGGING env var", () => {
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    originalEnv = process.env.DISABLE_THOUGHT_LOGGING;
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.DISABLE_THOUGHT_LOGGING;
+    } else {
+      process.env.DISABLE_THOUGHT_LOGGING = originalEnv;
+    }
+  });
+
+  it("should silence Logger when DISABLE_THOUGHT_LOGGING=true (P1-B env fix)", async () => {
+    process.env.DISABLE_THOUGHT_LOGGING = "true";
+    const envServer = new InterleavedThinkingServer();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await envServer.processStep({
+      thought: "thinking",
+      stepNumber: 1,
+      totalSteps: 1,
+      nextStepNeeded: false,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("should keep logging when DISABLE_THOUGHT_LOGGING is unset or false", async () => {
+    delete process.env.DISABLE_THOUGHT_LOGGING;
+    const envServer = new InterleavedThinkingServer();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await envServer.processStep({
+      thought: "thinking aloud",
+      stepNumber: 1,
+      totalSteps: 1,
+      nextStepNeeded: false,
+    });
+
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("should let explicit config arg override the env var", async () => {
+    process.env.DISABLE_THOUGHT_LOGGING = "true";
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // explicit disableLogging: false wins over env=true
+    const s = new InterleavedThinkingServer({ disableLogging: false });
+    await s.processStep({
+      thought: "loud",
+      stepNumber: 1,
+      totalSteps: 1,
+      nextStepNeeded: false,
+    });
+    expect(spy).toHaveBeenCalled();
+
+    spy.mockRestore();
   });
 });

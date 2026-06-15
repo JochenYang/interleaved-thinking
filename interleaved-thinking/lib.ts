@@ -24,6 +24,7 @@ export interface ToolCallData {
 export interface ToolResultData {
   toolName: string;
   success: boolean;
+  status?: "pending" | "executed" | "error";
   result?: any;
   error?: {
     type: string;
@@ -56,6 +57,11 @@ export interface InterleavedStepData {
   phase?: ThoughtPhase;
   toolCall?: ToolCallData;
   toolResult?: ToolResultData;
+
+  // Result of a previously registered tool call, passed back by the MCP host
+  // after the host has executed the actual tool. The server itself does NOT
+  // execute external tools; the host is responsible for forwarding.
+  previousToolResult?: ToolResultData;
 }
 
 /**
@@ -122,7 +128,12 @@ export interface ProcessResult {
 }
 
 /**
- * Manages tool call execution, limits, and result caching
+ * Manages tool call registration, limits, and pending-queue tracking.
+ *
+ * NOTE: This server does NOT execute external tools. The MCP host
+ * (Claude/Cursor/etc.) is responsible for taking a registered tool
+ * call, dispatching it to the right tool provider, and feeding the
+ * result back via the next call's `previousToolResult` field.
  */
 export class ToolCallManager {
   private maxToolCalls: number;
@@ -132,8 +143,7 @@ export class ToolCallManager {
   private successCount: number = 0;
   private failCount: number = 0;
   private totalExecTime: number = 0;
-  private resultCache: Map<string, ToolResultData> = new Map();
-  private mockResults?: Map<string, ToolResultData>;
+  private pendingCalls: ToolCallData[] = [];
 
   constructor(config: ToolCallConfig) {
     this.maxToolCalls = config.maxToolCalls;
@@ -142,7 +152,9 @@ export class ToolCallManager {
   }
 
   /**
-   * Execute a tool call (currently returns mock results)
+   * Register a tool call. Returns a pending ToolResultData with
+   * status='pending'. The host is expected to execute the tool and
+   * return the real result via the next call's previousToolResult.
    */
   public async executeToolCall(
     toolCall: ToolCallData
@@ -152,115 +164,46 @@ export class ToolCallManager {
     }
 
     this.callCount++;
-    const startTime = Date.now();
-
-    // Check if we have a mock result (for testing)
-    if (this.mockResults) {
-      const mockKey = this.getCacheKey(toolCall);
-      const mockResult = this.mockResults.get(mockKey);
-      if (mockResult) {
-        return mockResult;
-      }
-    }
-
-    // Check cache
-    if (this.enableCache) {
-      const cacheKey = this.getCacheKey(toolCall);
-      const cached = this.resultCache.get(cacheKey);
-      if (cached) {
-        return cached;
-      }
-    }
-
-    // Simulate tool execution (mock implementation)
-    const timeout = toolCall.metadata?.timeout || this.defaultTimeout;
-
-    try {
-      // Execute with timeout
-      const result = await Promise.race([
-        this.simulateToolExecution(toolCall),
-        this.createTimeoutPromise(timeout),
-      ]);
-
-      const finalResult: ToolResultData = {
-        ...result,
-        executionTime: Date.now() - startTime,
-        timestamp: new Date().toISOString(),
-      };
-
-      // Cache the result
-      if (this.enableCache && finalResult.success) {
-        const cacheKey = this.getCacheKey(toolCall);
-        this.resultCache.set(cacheKey, finalResult);
-      }
-
-      // Update statistics
-      this.successCount += finalResult.success ? 1 : 0;
-      this.failCount += finalResult.success ? 0 : 1;
-      this.totalExecTime += finalResult.executionTime;
-
-      return finalResult;
-    } catch (error) {
-      const result: ToolResultData = {
-        toolName: toolCall.toolName,
-        success: false,
-        error: {
-          type:
-            error instanceof Error && error.message.includes("timeout")
-              ? "TimeoutError"
-              : "ToolExecutionError",
-          message: error instanceof Error ? error.message : String(error),
-          recoveryStrategy:
-            error instanceof Error && error.message.includes("timeout")
-              ? "Use simpler tool or increase timeout"
-              : "Retry with adjusted parameters or use alternative tool",
-        },
-        executionTime: Date.now() - startTime,
-        timestamp: new Date().toISOString(),
-      };
-
-      // Update statistics for failed calls
-      this.failCount++;
-      this.totalExecTime += result.executionTime;
-
-      return result;
-    }
-  }
-
-  /**
-   * Simulate tool execution (mock implementation)
-   */
-  private async simulateToolExecution(
-    toolCall: ToolCallData
-  ): Promise<ToolResultData> {
-    // Simulate async work
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    this.successCount++;
+    this.pendingCalls.push({ ...toolCall });
 
     return {
       toolName: toolCall.toolName,
       success: true,
+      status: "pending",
       result: {
-        message: `Mock result for ${toolCall.toolName}`,
+        message:
+          "Tool call registered. The MCP host is responsible for executing this tool and passing the result back via the next call's previousToolResult field.",
         parameters: toolCall.parameters,
       },
-      executionTime: 0, // Will be set by caller
-      timestamp: "", // Will be set by caller
+      executionTime: 0,
+      timestamp: new Date().toISOString(),
     };
   }
 
   /**
-   * Create a promise that rejects after timeout
+   * List all tool calls registered but not yet marked as executed.
    */
-  private createTimeoutPromise(timeout: number): Promise<never> {
-    return new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`Tool execution timeout after ${timeout}ms`));
-      }, timeout);
-    });
+  public getPendingToolCalls(): ToolCallData[] {
+    return [...this.pendingCalls];
   }
 
   /**
-   * Check if more tool calls can be executed
+   * Mark a previously registered tool call as executed. Removes it
+   * from the pending queue. The actual ToolResultData is stored
+   * on the StateManager (see InterleavedThinkingServer).
+   */
+  public markToolCallExecuted(
+    toolCall: Pick<ToolCallData, "toolName">,
+    _result: ToolResultData
+  ): void {
+    this.pendingCalls = this.pendingCalls.filter(
+      (c) => c.toolName !== toolCall.toolName
+    );
+  }
+
+  /**
+   * Check if more tool calls can be registered
    */
   public canExecuteToolCall(): boolean {
     return this.callCount < this.maxToolCalls;
@@ -286,21 +229,7 @@ export class ToolCallManager {
     this.successCount = 0;
     this.failCount = 0;
     this.totalExecTime = 0;
-    this.resultCache.clear();
-  }
-
-  /**
-   * Inject mock results for testing
-   */
-  public injectMockResults(mockResults: Map<string, ToolResultData>): void {
-    this.mockResults = mockResults;
-  }
-
-  /**
-   * Generate cache key for a tool call
-   */
-  private getCacheKey(toolCall: ToolCallData): string {
-    return `${toolCall.toolName}:${JSON.stringify(toolCall.parameters)}`;
+    this.pendingCalls = [];
   }
 }
 
@@ -332,6 +261,18 @@ export class StateManager {
    */
   public addToolCall(record: ToolCallRecord): void {
     this.toolCalls.push(record);
+  }
+
+  /**
+   * Replace the result on the most recent tool call record.
+   * Used by the analysis phase to attach the host-executed payload
+   * to a tool call that was previously registered with status='pending'.
+   */
+  public updateLastToolResult(result: ToolResultData): void {
+    if (this.toolCalls.length === 0) {
+      return;
+    }
+    this.toolCalls[this.toolCalls.length - 1].result = result;
   }
 
   /**
@@ -517,12 +458,14 @@ export class InterleavedThinkingServer {
   private readonly defaultConfig: ServerConfig = {
     maxToolCalls: 50,
     defaultTimeout: 30000,
-    disableLogging: false,
+    disableLogging: process.env.DISABLE_THOUGHT_LOGGING === "true",
     enableResultCache: true,
     testMode: false,
   };
 
   constructor(config?: Partial<ServerConfig>) {
+    // disableLogging precedence: explicit config arg > DISABLE_THOUGHT_LOGGING env var.
+    // (defaultConfig.disableLogging already reads the env, so spread order is sufficient.)
     this.config = { ...this.defaultConfig, ...config };
 
     this.toolCallManager = new ToolCallManager({
@@ -593,33 +536,48 @@ export class InterleavedThinkingServer {
             throw new Error("toolCall is required for tool_call phase");
           }
           this.logger.logToolCall(step.toolCall);
+          // Register the call; the host is responsible for execution.
+          // We receive the real result back in the next call's previousToolResult.
           toolResult = await this.toolCallManager.executeToolCall(
             step.toolCall
           );
           this.logger.logToolResult(toolResult);
 
-          // Record tool call
+          // Record the registration with a pending result placeholder.
           this.stateManager.addToolCall({
             stepNumber: step.stepNumber,
             toolCall: step.toolCall,
             result: toolResult,
           });
 
-          // Add result to step for storage
           step.toolResult = toolResult;
           break;
 
         case "analysis":
           this.logger.logAnalysisStep(step);
-          // Provide last tool result if available
-          toolResult = this.stateManager.getLastToolResult();
+          if (step.previousToolResult) {
+            // Host has returned the real result for a previously registered call.
+            // Update the StateManager record so statistics and getLastToolResult
+            // reflect the actual outcome, and clear the pending queue entry.
+            this.stateManager.updateLastToolResult(step.previousToolResult);
+            this.toolCallManager.markToolCallExecuted(
+              { toolName: step.previousToolResult.toolName },
+              step.previousToolResult
+            );
+            toolResult = step.previousToolResult;
+            step.toolResult = step.previousToolResult;
+          } else {
+            // No host result supplied - fall back to whatever is in history.
+            toolResult = this.stateManager.getLastToolResult();
+          }
           break;
       }
 
       // Add step to history
       this.stateManager.addStep(step);
 
-      // Build response
+      // Build response. toolResult is passed through as-is (per MCP 2025-11-25
+      // and SEP-1624, structuredContent must not drop fields silently).
       const history = this.stateManager.getHistory();
       const nextHint = this.generateNextHint(step, toolResult);
       const response = {
@@ -630,12 +588,7 @@ export class InterleavedThinkingServer {
         nextHint,
         branches: Object.keys(history.branches),
         stepHistoryLength: history.steps.length,
-        ...(toolResult && {
-          toolResult: {
-            success: toolResult.success,
-            executionTime: toolResult.executionTime,
-          },
-        }),
+        ...(toolResult && { toolResult }),
       };
 
       return {
@@ -652,43 +605,63 @@ export class InterleavedThinkingServer {
   }
 
   /**
-   * Generate next step hint based on current phase and input
+   * L2 soft-guidance tips that nudge the model toward a hypothesis → evidence →
+   * conclusion flow without constraining the thought field. These are appended to
+   * the phase-specific base hint and never change the schema, so the model can
+   * still write free-form thoughts.
+   */
+  private static readonly PHASE_TIPS: Record<ThoughtPhase, string> = {
+    thinking:
+      "State your falsifiable hypothesis (e.g., 'H1: X causes Y') and your verification strategy before stepping.",
+    tool_call:
+      "Ensure toolCall.parameters are specific and concrete; avoid empty queries.",
+    analysis:
+      "Cite specific values from toolResult (e.g., 'result.count = 42') in your thought, not generic 'based on the result'.",
+  };
+
+  /**
+   * Generate next step hint based on current phase and input.
+   * Returns the base hint plus an L2 soft-guidance tip that nudges the model
+   * toward hypothesis → evidence → conclusion flow (no schema constraint).
    */
   private generateNextHint(
     input: InterleavedStepData,
     toolResult?: ToolResultData
   ): string {
     const { phase, stepNumber, nextStepNeeded, toolCall } = input;
+    const inferredPhase: ThoughtPhase = phase ?? "thinking";
 
-    // Phase-specific hints
-    if (phase === "tool_call") {
+    let baseHint: string;
+
+    // Phase-specific base hints (host-acknowledged after Sprint 1 P0-C)
+    if (inferredPhase === "tool_call") {
       if (toolCall && toolResult) {
-        // Tool has been executed - suggest analysis
-        return `Call interleaved-thinking with phase=analysis to analyze tool result`;
-      }
-      if (toolCall) {
+        // Tool call has been registered (status=pending).
+        // The host should execute it and call back with previousToolResult.
+        baseHint = `Call ${toolCall.toolName} on the MCP host, then call interleaved-thinking with phase=analysis and pass the result back via previousToolResult`;
+      } else if (toolCall) {
         // Tool is pending execution
-        return `Execute ${toolCall.toolName}, then call this tool again for reflection`;
+        baseHint = `Execute ${toolCall.toolName}, then call this tool again for reflection`;
+      } else {
+        baseHint = `Continue to next step`;
       }
-    }
-
-    if (phase === "thinking" && nextStepNeeded) {
-      return `Continue to next step (step ${stepNumber + 1}) or call a tool for information`;
-    }
-
-    if (phase === "analysis") {
+    } else if (inferredPhase === "thinking") {
       if (nextStepNeeded) {
-        return `Continue reasoning or call tools again as needed`;
+        baseHint = `Continue to next step (step ${stepNumber + 1}) or call a tool for information`;
+      } else {
+        baseHint = "Thinking process complete";
       }
-      return `Reasoning complete - ready to return final answer`;
+    } else {
+      // analysis
+      if (nextStepNeeded) {
+        baseHint = `Continue reasoning or call tools again as needed`;
+      } else {
+        baseHint = `Reasoning complete - ready to return final answer`;
+      }
     }
 
-    // Default hint based on nextStepNeeded
-    if (nextStepNeeded) {
-      return `Continue to next step`;
-    }
-
-    return "Thinking process complete";
+    const tip = InterleavedThinkingServer.PHASE_TIPS[inferredPhase];
+    return tip ? `${baseHint}\n💡 Tip: ${tip}` : baseHint;
   }
 
   /**
@@ -704,13 +677,6 @@ export class InterleavedThinkingServer {
   public reset(): void {
     this.toolCallManager.reset();
     this.stateManager = new StateManager();
-  }
-
-  /**
-   * Inject mock results for testing
-   */
-  public injectMockResults(mockResults: Map<string, ToolResultData>): void {
-    this.toolCallManager.injectMockResults(mockResults);
   }
 
   /**

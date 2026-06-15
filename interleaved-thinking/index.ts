@@ -20,7 +20,9 @@ server.registerTool(
 
 Use cases: analyze complex problems, generate and verify hypotheses, need tool assistance (e.g., read files/execute commands), reflect on results and adjust strategy.
 
-Workflow: thinking → tool_call → analysis → repeat until complete. Generate hypotheses, verify them through tools, revise based on results.`,
+Workflow: thinking → tool_call → analysis → repeat until complete. Generate hypotheses, verify them through tools, revise based on results.
+
+Tool execution is delegated to the MCP host: this server only registers tool calls and tracks the interleaving flow. The host is responsible for actually invoking external tools and feeding the result back via the next call's previousToolResult field.`,
     inputSchema: {
       thought: z.string().describe("Your current thinking content"),
       stepNumber: z
@@ -101,7 +103,29 @@ Workflow: thinking → tool_call → analysis → repeat until complete. Generat
           })
         )
         .optional()
-        .describe("Tool call information (required when phase='tool_call')"),
+        .describe(
+          "Tool call information (required when phase='tool_call'). This server registers tool calls but does not execute them. The MCP host is responsible for execution; the result should be passed back via the next call's previousToolResult field."
+        ),
+      previousToolResult: z
+        .object({
+          toolName: z.string(),
+          success: z.boolean(),
+          status: z.enum(["pending", "executed", "error"]).optional(),
+          executionTime: z.number(),
+          timestamp: z.string(),
+          result: z.unknown().optional(),
+          error: z
+            .object({
+              type: z.string(),
+              message: z.string(),
+              recoveryStrategy: z.string().optional(),
+            })
+            .optional(),
+        })
+        .optional()
+        .describe(
+          "Pass back the result of the previously registered tool call after the MCP host has executed it. Use this on the analysis phase (or any later call) to feed the real payload into the reasoning loop. Omit on a fresh tool_call phase."
+        ),
       isRevision: z
         .boolean()
         .optional()
@@ -134,11 +158,30 @@ Workflow: thinking → tool_call → analysis → repeat until complete. Generat
       stepHistoryLength: z.number().describe("Total steps processed"),
       toolResult: z
         .object({
+          status: z.enum(["pending", "executed", "error"]).optional(),
+          toolName: z.string().optional(),
           success: z.boolean(),
           executionTime: z.number(),
+          timestamp: z.string().optional(),
+          result: z.unknown().optional(),
+          error: z
+            .object({
+              type: z.string(),
+              message: z.string(),
+              recoveryStrategy: z.string().optional(),
+            })
+            .optional(),
         })
         .optional()
-        .describe("Tool execution result (when phase=tool_call)"),
+        .describe(
+          "Tool execution result. When status='pending', the host is responsible for executing the tool and passing the real result back via the next call's previousToolResult field. When status='executed' (or undefined), result carries the actual payload."
+        ),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
     },
   },
   async (args) => {
