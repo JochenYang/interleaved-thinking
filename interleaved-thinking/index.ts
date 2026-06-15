@@ -7,7 +7,7 @@ import { InterleavedThinkingServer } from "./lib.js";
 
 const server = new McpServer({
   name: "interleaved-thinking",
-  version: "0.5.0",
+  version: "0.6.0",
 });
 
 const thinkingServer = new InterleavedThinkingServer();
