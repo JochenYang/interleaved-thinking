@@ -18,7 +18,7 @@ An MCP server implementation that enables AI to perform interleaved sequential t
 - **Flexible Strategy Adjustment**: Support for revisions, branching, and dynamic step count adjustment
 - **Complete History Tracking**: Record all thinking steps and tool calls with detailed information
 - **Resource Control**: Built-in limits for tool calls and timeout control to prevent infinite loops
-- **Test Support**: Mock tool results for testing without real tool execution
+- **Host-Delegated Execution**: The server registers tool calls and tracks the interleaving flow; the MCP host is responsible for actually executing tools and passing the result back via `previousToolResult`
 
 ### Use Cases
 
@@ -55,6 +55,16 @@ Facilitates interleaved sequential thinking with dynamic tool calling.
 - `branchFromStep` (integer): Branching point step number
 - `branchId` (string): Branch identifier
 - `needsMoreSteps` (boolean): If more steps are needed
+
+### When NOT to use this tool
+
+Skip `interleaved-thinking` for:
+- Single-step questions, pure translations, or lookups where the answer is known up front
+- Tasks that already have a dedicated MCP tool that gets there in one call
+- Mechanical edits where there is zero exploration space
+- Pure chat that does not need any tool at all
+
+In these cases, calling this tool adds latency and noise without improving the answer.
 
 ### Configuration
 

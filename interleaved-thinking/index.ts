@@ -16,13 +16,31 @@ server.registerTool(
   "interleaved-thinking",
   {
     title: "Interleaved Sequential Thinking",
-    description: `Interleaved sequential thinking tool for structured problem analysis.
+    description: `Interleaved sequential thinking tool that interleaves reasoning with tool execution to solve multi-step problems.
 
-Use cases: analyze complex problems, generate and verify hypotheses, need tool assistance (e.g., read files/execute commands), reflect on results and adjust strategy.
+When to use: plan, verify, hypothesize, branch, revise, integrate-tools, reflect, reason-about-evidence, decide, course-correct.
 
-Workflow: thinking → tool_call → analysis → repeat until complete. Generate hypotheses, verify them through tools, revise based on results.
+Key features:
+- Revision support: revise any earlier step via isRevision + revisesStep
+- Branching: explore alternative hypotheses in parallel via branchFromStep + branchId
+- Automatic phase inference: thinking / tool_call / analysis cycle is auto-detected from input shape
+- Host-delegated execution: this server only registers tool calls; the MCP host actually invokes them and feeds results back via previousToolResult
+- Quality signals: each response carries convergence / evidence-coverage / hypothesis-coherence scores so the model can self-monitor
+- Anti-idle-loop guidance: nextHint flags dead-end patterns (2+ thinking steps without tool call, 3+ revisions of the same step, missing analysis after tool call, budget exhaustion)
 
-Tool execution is delegated to the MCP host: this server only registers tool calls and tracks the interleaving flow. The host is responsible for actually invoking external tools and feeding the result back via the next call's previousToolResult field.`,
+Workflow: thinking → tool_call → analysis → repeat until nextStepNeeded=false. Each call appends to an in-memory history; pass the same stepNumber sequence to keep state coherent.
+
+You should:
+1. Start each step by stating a falsifiable hypothesis and how you will verify it before jumping to tools.
+2. Use phase=thinking to reason, phase=tool_call to register a tool, phase=analysis to interpret a previousToolResult.
+3. Pass the host's actual tool result back in previousToolResult on the next analysis call — do not synthesize results yourself.
+4. Cite concrete values from toolResult (e.g., "result.count = 42") instead of generic "based on the result".
+5. Use isRevision + revisesStep to correct earlier reasoning rather than silently ignoring it; after 3+ revisions of the same step, branch into an alternative hypothesis instead.
+6. Use branchFromStep + branchId to explore parallel hypotheses; branches live alongside the main flow and can be merged in later analysis.
+7. Keep toolCall.parameters specific and concrete — empty or vague queries waste the host's tool budget.
+8. Treat nextHint as a system-level nudge; convergence / evidenceCoverage / hypothesisCoherence < 0.3 means you have not yet integrated enough evidence.
+9. If a tool call fails, retry with adjusted parameters or switch tools — do not give up on nextStepNeeded after one failure.
+10. Only set nextStepNeeded=false when truly satisfied with the integrated answer; do not stop after a single tool failure.`,
     inputSchema: {
       thought: z.string().describe("Your current thinking content"),
       stepNumber: z
@@ -201,6 +219,66 @@ Tool execution is delegated to the MCP host: this server only registers tool cal
     return {
       content: result.content,
       structuredContent: parsedContent,
+    };
+  }
+);
+
+// --- MCP Resources (Sprint 2 B-4) -----------------------------------------
+// Expose the in-memory history and branch list as MCP resources so any
+// MCP-aware client can read them via resources/read without re-running
+// processStep. The handlers read the live StateManager snapshot on each
+// read, so the resource is always fresh within a single session.
+const HISTORY_URI = "interleaved://history/current";
+const BRANCHES_URI = "interleaved://branches/list";
+
+server.registerResource(
+  "interleaved-history",
+  HISTORY_URI,
+  {
+    title: "Interleaved Thinking History",
+    description:
+      "Current session history: every step (thought + phase + toolCall + toolResult), branches, and aggregate statistics. Read via resources/read.",
+    mimeType: "application/json",
+  },
+  async () => ({
+    contents: [
+      {
+        uri: HISTORY_URI,
+        mimeType: "application/json",
+        text: JSON.stringify(thinkingServer.getHistory(), null, 2),
+      },
+    ],
+  })
+);
+
+server.registerResource(
+  "interleaved-branches",
+  BRANCHES_URI,
+  {
+    title: "Interleaved Thinking Branches",
+    description:
+      "List of active branch IDs and the steps recorded under each branch. Read via resources/read.",
+    mimeType: "application/json",
+  },
+  async () => {
+    const branches = thinkingServer.getHistory().branches;
+    const summary = Object.fromEntries(
+      Object.entries(branches).map(([id, steps]) => [
+        id,
+        {
+          stepCount: steps.length,
+          stepNumbers: steps.map((s) => s.stepNumber),
+        },
+      ])
+    );
+    return {
+      contents: [
+        {
+          uri: BRANCHES_URI,
+          mimeType: "application/json",
+          text: JSON.stringify(summary, null, 2),
+        },
+      ],
     };
   }
 );

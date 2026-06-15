@@ -1,6 +1,16 @@
 import chalk from "chalk";
 
 /**
+ * Clamp a number to [0, 1]. Module-level helper for quality-signal scoring.
+ */
+function clamp01(n: number): number {
+  if (Number.isNaN(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+/**
  * Phase of the interleaved thinking process
  */
 export type ThoughtPhase = "thinking" | "tool_call" | "analysis";
@@ -125,6 +135,21 @@ export interface ToolCallStatistics {
 export interface ProcessResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+}
+
+/**
+ * Lightweight quality signals computed from in-memory history.
+ * All three scores are normalized to [0, 1]. Thresholds (0.3 / 0.7) are
+ * tunable by the caller; the server only emits the raw numbers plus an
+ * optional qualityWarning when nextStepNeeded=false while scores are low.
+ */
+export interface QualitySignals {
+  /** How similar the last few thoughts are (consecutive-pair Jaccard). High = converged. */
+  convergence: number;
+  /** successfulToolCalls / analysis steps. High = analysis is grounded in tool output. */
+  evidenceCoverage: number;
+  /** Pairwise Jaccard similarity over the last few thoughts. High = consistent vocabulary; low = scattered. */
+  hypothesisCoherence: number;
 }
 
 /**
@@ -580,7 +605,27 @@ export class InterleavedThinkingServer {
       // and SEP-1624, structuredContent must not drop fields silently).
       const history = this.stateManager.getHistory();
       const nextHint = this.generateNextHint(step, toolResult);
-      const response = {
+      const qualitySignals = this.computeQualitySignals(history);
+
+      // Sprint 2 C-3: soft warning when caller claims completion while
+      // quality is still low. Never block — the call has already succeeded;
+      // we just surface the signal so the model can decide whether to
+      // continue instead of stopping here.
+      let qualityWarning: string | undefined;
+      if (
+        step.nextStepNeeded === false &&
+        qualitySignals.convergence < 0.3
+      ) {
+        qualityWarning = `Warning: nextStepNeeded=false but convergence=${qualitySignals.convergence.toFixed(2)} (<0.3). Evidence may not be integrated yet.`;
+      } else if (
+        step.nextStepNeeded === false &&
+        qualitySignals.evidenceCoverage < 0.3 &&
+        history.statistics.totalToolCalls > 0
+      ) {
+        qualityWarning = `Warning: nextStepNeeded=false but evidenceCoverage=${qualitySignals.evidenceCoverage.toFixed(2)} (<0.3). No analysis step was backed by a successful tool result.`;
+      }
+
+      const response: Record<string, unknown> = {
         stepNumber: step.stepNumber,
         totalSteps: step.totalSteps,
         nextStepNeeded: step.nextStepNeeded,
@@ -588,7 +633,9 @@ export class InterleavedThinkingServer {
         nextHint,
         branches: Object.keys(history.branches),
         stepHistoryLength: history.steps.length,
+        qualitySignals,
         ...(toolResult && { toolResult }),
+        ...(qualityWarning && { qualityWarning }),
       };
 
       return {
@@ -619,10 +666,12 @@ export class InterleavedThinkingServer {
       "Cite specific values from toolResult (e.g., 'result.count = 42') in your thought, not generic 'based on the result'.",
   };
 
+  /** Hard-rule thresholds (Sprint 2 C-1). Tunable via constant if needed. */
+  private static readonly MAX_TOOL_BUDGET_RATIO = 0.8;
+
   /**
    * Generate next step hint based on current phase and input.
-   * Returns the base hint plus an L2 soft-guidance tip that nudges the model
-   * toward hypothesis → evidence → conclusion flow (no schema constraint).
+   * Returns: baseHint + Tip + any Warning: hard-rule warnings based on history.
    */
   private generateNextHint(
     input: InterleavedStepData,
@@ -661,7 +710,173 @@ export class InterleavedThinkingServer {
     }
 
     const tip = InterleavedThinkingServer.PHASE_TIPS[inferredPhase];
-    return tip ? `${baseHint}\n💡 Tip: ${tip}` : baseHint;
+    const tipLine = tip ? `\nTip: ${tip}` : "";
+
+    // Sprint 2 C-1: append Warning: hard-rule warnings based on history.
+    const warnings = this.collectAntiLoopWarnings(input);
+
+    return warnings.length > 0
+      ? `${baseHint}${tipLine}\n${warnings.join("\n")}`
+      : `${baseHint}${tipLine}`;
+  }
+
+  /**
+   * Sprint 2 C-1: hard-rule warnings that prevent the most common failure
+   * patterns (idle-loop thinking, revision loops, missing analysis, budget
+   * exhaustion). Pure history-derived; never throws; returns [] when nothing
+   * to flag.
+   */
+  private collectAntiLoopWarnings(
+    input: InterleavedStepData
+  ): string[] {
+    const warnings: string[] = [];
+    const history = this.stateManager.getHistory();
+    const steps = history.steps;
+
+    // Rule 1 (anti-idle): 2+ consecutive thinking phases without any toolCall.
+    // The current step is NOT in history yet, so we inspect steps[N-1..N-2].
+    if (input.phase === "thinking" || input.phase === undefined) {
+      const recent = steps.slice(-2);
+      const allThinkingNoTool = recent.length === 2 &&
+        recent.every((s) => s.phase === "thinking" && !s.toolCall);
+      if (allThinkingNoTool && input.toolCall === undefined) {
+        warnings.push(
+          "Warning: You have thought 2+ steps without calling a tool. Consider phase=tool_call to verify a hypothesis."
+        );
+      }
+    }
+
+    // Rule 2 (anti-revision-loop): the same revisesStep target has been
+    // revised 3+ times across the whole history. Count occurrences on the
+    // committed steps (this step is not yet in history).
+    if (input.isRevision && input.revisesStep !== undefined) {
+      const target = input.revisesStep;
+      const sameTargetRevisions = steps.filter(
+        (s) => s.isRevision && s.revisesStep === target
+      ).length;
+      if (sameTargetRevisions + 1 >= 3) {
+        warnings.push(
+          `Warning: You have revised step ${target} 3+ times. Consider branching into an alternative hypothesis via branchFromStep instead.`
+        );
+      }
+    }
+
+    // Rule 3 (force analysis): model just registered a tool_call (status=pending
+    // sits in history) and is now calling again as phase=thinking WITHOUT
+    // previousToolResult. Note: the CURRENT step is already committed to history
+    // before generateNextHint runs, so we inspect steps[length-2] (the prior
+    // committed step) instead of steps[length-1].
+    const priorStep = steps.length >= 2 ? steps[steps.length - 2] : undefined;
+    if (
+      (input.phase === "thinking" || input.phase === undefined) &&
+      priorStep?.phase === "tool_call" &&
+      input.toolCall === undefined &&
+      input.previousToolResult === undefined
+    ) {
+      warnings.push(
+        "Warning: You registered a tool call but did not pass previousToolResult. Please call again with phase=analysis and the real result."
+      );
+    }
+
+    // Rule 4 (force closure): ratio of tool calls already committed
+    // (or about-to-commit for tool_call phase) against the configured budget.
+    const stats = history.statistics;
+    const budgetMax = this.config.maxToolCalls;
+    if (budgetMax > 0) {
+      const effectiveCalls =
+        input.phase === "tool_call"
+          ? stats.totalToolCalls + 1
+          : stats.totalToolCalls;
+      const ratio = effectiveCalls / budgetMax;
+      if (ratio >= InterleavedThinkingServer.MAX_TOOL_BUDGET_RATIO) {
+        const usedPct = Math.round(ratio * 100);
+        warnings.push(
+          `Warning: You have used ${usedPct}% of your tool budget. Consider concluding soon.`
+        );
+      }
+    }
+
+    return warnings;
+  }
+
+  /**
+   * Sprint 2 C-2: compute lightweight quality signals from history.
+   * No embeddings, no external deps. All scores in [0, 1].
+   *
+   * - convergence: 1 - mean(char-Jaccard distance) over consecutive pairs
+   *   in the last 5 thoughts. High = model is settling on an answer.
+   * - evidenceCoverage: successfulToolCalls / analysis-phase steps. High =
+   *   analysis is grounded by real tool results. 0 when there are no
+   *   analysis steps yet (signals "no analysis has happened").
+   * - hypothesisCoherence: 1 - mean(char-Jaccard distance) over all pairs
+   *   in the last 5 thoughts. With <2 thoughts, defaults to 0 (no signal).
+   */
+  public computeQualitySignals(history?: StepHistory): QualitySignals {
+    const h = history ?? this.stateManager.getHistory();
+    const steps = h.steps;
+    const last5 = steps.slice(-5);
+
+    // convergence: consecutive pair Jaccard over last 5 thoughts
+    let convergence = 0;
+    if (last5.length >= 2) {
+      let sum = 0;
+      let pairs = 0;
+      for (let i = 1; i < last5.length; i++) {
+        sum += InterleavedThinkingServer.jaccardSimilarity(
+          last5[i - 1].thought,
+          last5[i].thought
+        );
+        pairs++;
+      }
+      convergence = pairs > 0 ? sum / pairs : 0;
+    }
+
+    // evidenceCoverage: successful tool calls vs analysis-phase steps
+    const analysisCount = steps.filter((s) => s.phase === "analysis").length;
+    const evidenceCoverage =
+      analysisCount > 0
+        ? Math.min(1, h.statistics.successfulToolCalls / analysisCount)
+        : 0;
+
+    // hypothesisCoherence: pairwise Jaccard over last 5 thoughts
+    let hypothesisCoherence = 0;
+    if (last5.length >= 2) {
+      let sum = 0;
+      let pairs = 0;
+      for (let i = 0; i < last5.length; i++) {
+        for (let j = i + 1; j < last5.length; j++) {
+          sum += InterleavedThinkingServer.jaccardSimilarity(
+            last5[i].thought,
+            last5[j].thought
+          );
+          pairs++;
+        }
+      }
+      hypothesisCoherence = pairs > 0 ? sum / pairs : 0;
+    }
+
+    return {
+      convergence: clamp01(convergence),
+      evidenceCoverage: clamp01(evidenceCoverage),
+      hypothesisCoherence: clamp01(hypothesisCoherence),
+    };
+  }
+
+  /**
+   * Character-level Jaccard similarity between two strings.
+   * Tokens are whitespace-split, lower-cased, deduped via Set.
+   * Returns 0 for empty/identical-empty inputs (no overlap to compute).
+   */
+  private static jaccardSimilarity(a: string, b: string): number {
+    const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
+    const tokensB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
+    if (tokensA.size === 0 && tokensB.size === 0) return 0;
+    let intersection = 0;
+    for (const t of tokensA) {
+      if (tokensB.has(t)) intersection++;
+    }
+    const union = tokensA.size + tokensB.size - intersection;
+    return union === 0 ? 0 : intersection / union;
   }
 
   /**

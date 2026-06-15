@@ -450,7 +450,7 @@ describe("InterleavedThinkingServer", () => {
       const result = await server.processStep(input);
       const data = JSON.parse(result.content[0].text);
 
-      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toContain("Tip:");
       expect(data.nextHint).toMatch(/falsifiable hypothesis/i);
       expect(data.nextHint).toMatch(/verification strategy/i);
     });
@@ -467,7 +467,7 @@ describe("InterleavedThinkingServer", () => {
       const result = await server.processStep(input);
       const data = JSON.parse(result.content[0].text);
 
-      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toContain("Tip:");
       expect(data.nextHint).toMatch(/specific and concrete/i);
     });
 
@@ -482,7 +482,7 @@ describe("InterleavedThinkingServer", () => {
       const result = await server.processStep(input);
       const data = JSON.parse(result.content[0].text);
 
-      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toContain("Tip:");
       expect(data.nextHint).toMatch(/Cite specific values/i);
       expect(data.nextHint).toMatch(/result\./i);
     });
@@ -499,7 +499,7 @@ describe("InterleavedThinkingServer", () => {
       const data = JSON.parse(result.content[0].text);
 
       expect(data.phase).toBe("thinking");
-      expect(data.nextHint).toContain("💡 Tip:");
+      expect(data.nextHint).toContain("Tip:");
       expect(data.nextHint).toMatch(/falsifiable hypothesis/i);
     });
   });
@@ -981,5 +981,369 @@ describe("P1-B: DISABLE_THOUGHT_LOGGING env var", () => {
     expect(spy).toHaveBeenCalled();
 
     spy.mockRestore();
+  });
+});
+
+describe("Sprint 2 B-1: 3-section tool description", () => {
+  it("index.ts description declares When to use, Key features, You should sections", () => {
+    const indexPath = resolve(__dirname, "..", "index.ts");
+    const source = readFileSync(indexPath, "utf8");
+
+    expect(source).toMatch(/When to use:/);
+    expect(source).toMatch(/Key features:/);
+    expect(source).toMatch(/You should:/);
+
+    // Last rule must be the canonical "only stop when truly satisfied" rule
+    expect(source).toMatch(
+      /Only set nextStepNeeded=false when truly satisfied with the integrated answer; do not stop after a single tool failure\./
+    );
+
+    // When-to-use list contains the 10 verbs the spec requires
+    const verbs = [
+      "plan",
+      "verify",
+      "hypothesize",
+      "branch",
+      "revise",
+      "integrate-tools",
+      "reflect",
+      "reason-about-evidence",
+      "decide",
+      "course-correct",
+    ];
+    for (const v of verbs) {
+      expect(source, `missing verb: ${v}`).toContain(v);
+    }
+  });
+});
+
+describe("Sprint 2 B-2: README 'When NOT to use' section", () => {
+  it("README.md has the When NOT to use section before Configuration", () => {
+    const readmePath = resolve(__dirname, "..", "README.md");
+    const source = readFileSync(readmePath, "utf8");
+
+    expect(source).toMatch(/### When NOT to use this tool/);
+
+    const notUseIdx = source.indexOf("### When NOT to use this tool");
+    const configIdx = source.indexOf("### Configuration");
+    expect(notUseIdx).toBeGreaterThan(-1);
+    expect(configIdx).toBeGreaterThan(-1);
+    expect(notUseIdx).toBeLessThan(configIdx);
+
+    // At least one of the canonical skip reasons
+    expect(source).toMatch(/Single-step questions/);
+    expect(source).toMatch(/adds latency and noise/);
+  });
+});
+
+describe("Sprint 2 B-3: USAGE_GUIDELINES.md", () => {
+  function readGuidelines(): string {
+    const docPath = resolve(__dirname, "..", "docs", "USAGE_GUIDELINES.md");
+    return readFileSync(docPath, "utf8");
+  }
+
+  it("exists and contains the four canonical sections", () => {
+    const md = readGuidelines();
+    expect(md).toMatch(/## When TO use this tool/);
+    expect(md).toMatch(/## When NOT to use this tool/);
+    expect(md).toMatch(/## Phase semantics/);
+    expect(md).toMatch(/## You should/);
+  });
+
+  it("You should section contains exactly 10 numbered rules", () => {
+    const md = readGuidelines();
+    const youShouldIdx = md.indexOf("## You should");
+    expect(youShouldIdx).toBeGreaterThan(-1);
+    const tail = md.slice(youShouldIdx);
+    // Match "N. " at the start of numbered rules
+    const matches = tail.match(/^\d+\.\s/gm) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("includes Quick manual verification with inspector command", () => {
+    const md = readGuidelines();
+    expect(md).toMatch(/Quick manual verification/);
+    expect(md).toMatch(/modelcontextprotocol\/inspector/);
+    expect(md).toMatch(/interleaved:\/\/history\/current/);
+    expect(md).toMatch(/interleaved:\/\/branches\/list/);
+  });
+});
+
+describe("Sprint 2 B-4: MCP Resource registration", () => {
+  it("index.ts declares server.registerResource for history and branches", () => {
+    const indexPath = resolve(__dirname, "..", "index.ts");
+    const source = readFileSync(indexPath, "utf8");
+
+    // Must call registerResource at least twice (history + branches)
+    const occurrences = source.match(/server\.registerResource\(/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(2);
+
+    // Two canonical URIs
+    expect(source).toMatch(/interleaved:\/\/history\/current/);
+    expect(source).toMatch(/interleaved:\/\/branches\/list/);
+
+    // Both callbacks must read thinkingServer.getHistory()
+    const historyReads = (
+      source.match(/thinkingServer\.getHistory\(\)/g) ?? []
+    ).length;
+    expect(historyReads).toBeGreaterThanOrEqual(2);
+
+    // mimeType: application/json for both
+    expect(source.match(/application\/json/g)?.length ?? 0).toBeGreaterThanOrEqual(
+      2
+    );
+  });
+
+  it("InterleavedThinkingServer.getHistory returns the same shape resources expose", () => {
+    const server = new InterleavedThinkingServer({ disableLogging: true });
+    const history = server.getHistory();
+    expect(history).toHaveProperty("steps");
+    expect(history).toHaveProperty("branches");
+    expect(history).toHaveProperty("toolCalls");
+    expect(history).toHaveProperty("statistics");
+  });
+});
+
+describe("Sprint 2 C-1: anti-loop warnings in nextHint", () => {
+  it("Rule 1: flags 2+ consecutive thinking steps without a toolCall", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    // Step 1: thinking, no tool
+    await s.processStep({
+      thought: "h1 hypothesis",
+      stepNumber: 1,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    // Step 2: thinking again, no tool → trigger
+    const r = await s.processStep({
+      thought: "h1 still pondering",
+      stepNumber: 2,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    const data = JSON.parse(r.content[0].text);
+    expect(data.nextHint).toContain("Warning:");
+    expect(data.nextHint).toMatch(/call a tool/i);
+  });
+
+  it("Rule 2: flags 3+ revisions of the same step", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    // Step 1: target to be revised
+    await s.processStep({
+      thought: "initial claim",
+      stepNumber: 1,
+      totalSteps: 10,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    // Step 2: first revision — no warning yet (1st revision)
+    await s.processStep({
+      thought: "revision 1",
+      stepNumber: 2,
+      totalSteps: 10,
+      nextStepNeeded: true,
+      phase: "thinking",
+      isRevision: true,
+      revisesStep: 1,
+    });
+    // Step 3: second revision — no warning yet (2nd revision)
+    await s.processStep({
+      thought: "revision 2",
+      stepNumber: 3,
+      totalSteps: 10,
+      nextStepNeeded: true,
+      phase: "thinking",
+      isRevision: true,
+      revisesStep: 1,
+    });
+    // Step 4: third revision — warning fires (3+ revisions)
+    const r4 = await s.processStep({
+      thought: "revision 3",
+      stepNumber: 4,
+      totalSteps: 10,
+      nextStepNeeded: true,
+      phase: "thinking",
+      isRevision: true,
+      revisesStep: 1,
+    });
+    const data = JSON.parse(r4.content[0].text);
+    expect(data.nextHint).toContain("Warning:");
+    expect(data.nextHint).toMatch(/branch/i);
+  });
+
+  it("Rule 3: flags missing analysis after a tool_call registration", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    // Step 1: register a tool call (status=pending)
+    await s.processStep({
+      thought: "calling tool",
+      stepNumber: 1,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "tool_call",
+      toolCall: { toolName: "fetch", parameters: { q: "x" } },
+    });
+    // Step 2: phase=thinking WITHOUT previousToolResult → trigger
+    const r = await s.processStep({
+      thought: "forgot to pass the result back",
+      stepNumber: 2,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    const data = JSON.parse(r.content[0].text);
+    expect(data.nextHint).toContain("Warning:");
+    expect(data.nextHint).toMatch(/phase=analysis/);
+  });
+
+  it("Rule 4: flags tool-budget exhaustion", async () => {
+    const s = new InterleavedThinkingServer({
+      disableLogging: true,
+      maxToolCalls: 2,
+    });
+    // First call: tool_call → 1 used
+    await s.processStep({
+      thought: "call 1",
+      stepNumber: 1,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "tool_call",
+      toolCall: { toolName: "a", parameters: {} },
+    });
+    // Second call: tool_call → 2 used (100% of budget)
+    const r = await s.processStep({
+      thought: "call 2",
+      stepNumber: 2,
+      totalSteps: 5,
+      nextStepNeeded: true,
+      phase: "tool_call",
+      toolCall: { toolName: "b", parameters: {} },
+    });
+    const data = JSON.parse(r.content[0].text);
+    expect(data.nextHint).toContain("Warning:");
+    expect(data.nextHint).toMatch(/tool budget/);
+  });
+});
+
+describe("Sprint 2 C-2: qualitySignals computation", () => {
+  it("returns three numeric fields in [0, 1] for an empty history", () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    const signals = s.computeQualitySignals();
+    expect(signals).toHaveProperty("convergence");
+    expect(signals).toHaveProperty("evidenceCoverage");
+    expect(signals).toHaveProperty("hypothesisCoherence");
+    for (const k of [
+      "convergence",
+      "evidenceCoverage",
+      "hypothesisCoherence",
+    ] as const) {
+      const v = signals[k];
+      expect(typeof v).toBe("number");
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("convergence rises as thoughts converge, evidenceCoverage rises with successful tools", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+
+    // Step 1: thinking with a hypothesis
+    await s.processStep({
+      thought: "H1 the bug is in validate.ts because line 42 fails",
+      stepNumber: 1,
+      totalSteps: 4,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+
+    // Step 2: tool_call
+    await s.processStep({
+      thought: "verify H1",
+      stepNumber: 2,
+      totalSteps: 4,
+      nextStepNeeded: true,
+      phase: "tool_call",
+      toolCall: { toolName: "read_file", parameters: { path: "validate.ts" } },
+    });
+
+    // Step 3: analysis with successful host result
+    const r3 = await s.processStep({
+      thought:
+        "H1 the bug is in validate.ts because line 42 fails. analysis confirms line 42",
+      stepNumber: 3,
+      totalSteps: 4,
+      nextStepNeeded: true,
+      phase: "analysis",
+      previousToolResult: {
+        toolName: "read_file",
+        success: true,
+        status: "executed",
+        result: { content: "line 42 has bug" },
+        executionTime: 10,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    const data3 = JSON.parse(r3.content[0].text);
+    expect(data3.qualitySignals.convergence).toBeGreaterThan(0);
+    expect(data3.qualitySignals.evidenceCoverage).toBeGreaterThan(0);
+    // All three are valid 0-1 numbers
+    const s3 = data3.qualitySignals;
+    expect(s3.convergence).toBeLessThanOrEqual(1);
+    expect(s3.evidenceCoverage).toBeLessThanOrEqual(1);
+    expect(s3.hypothesisCoherence).toBeLessThanOrEqual(1);
+  });
+
+  it("evidenceCoverage=0 when there are no analysis steps and no tool calls", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    await s.processStep({
+      thought: "just thinking",
+      stepNumber: 1,
+      totalSteps: 2,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    const signals = s.computeQualitySignals();
+    expect(signals.evidenceCoverage).toBe(0);
+  });
+});
+
+describe("Sprint 2 C-3: qualityWarning in response when nextStepNeeded=false but quality is low", () => {
+  it("emits qualityWarning when caller sets nextStepNeeded=false on a single divergent thinking step", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    // Single step, no prior history → convergence is 0 (no pairs)
+    const r = await s.processStep({
+      thought: "some isolated thought",
+      stepNumber: 1,
+      totalSteps: 1,
+      nextStepNeeded: false,
+      phase: "thinking",
+    });
+    const data = JSON.parse(r.content[0].text);
+    expect(data.qualityWarning).toBeDefined();
+    expect(data.qualityWarning).toMatch(/convergence/);
+    expect(data.qualityWarning).toContain("Warning:");
+  });
+
+  it("does NOT emit qualityWarning when convergence is high", async () => {
+    const s = new InterleavedThinkingServer({ disableLogging: true });
+    // Two near-identical thinking steps → convergence should be high
+    await s.processStep({
+      thought: "alpha beta gamma delta",
+      stepNumber: 1,
+      totalSteps: 2,
+      nextStepNeeded: true,
+      phase: "thinking",
+    });
+    const r = await s.processStep({
+      thought: "alpha beta gamma delta epsilon",
+      stepNumber: 2,
+      totalSteps: 2,
+      nextStepNeeded: false,
+      phase: "thinking",
+    });
+    const data = JSON.parse(r.content[0].text);
+    expect(data.qualitySignals.convergence).toBeGreaterThan(0.5);
+    expect(data.qualityWarning).toBeUndefined();
   });
 });
